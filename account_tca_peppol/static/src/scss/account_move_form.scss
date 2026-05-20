@@ -1,0 +1,33 @@
+// PINT AE 3-column layout — fix the inner-group's label cell at a *pixel*
+// width so the input cell always gets the remaining space. Odoo's default
+// `minmax(140px, 22%) auto` template uses 22% which collapses below the
+// label's natural width, forcing wrap + tiny input.
+// Scoped to .o_tca_pint_col so only our three top sections are affected.
+//
+// 220px label / min 260px input fits "Buyer Trade License / Reg. ID",
+// "Out of Scope (Commercial Invoice)" on one line, leaves enough room for
+// the input to show real data without truncation.
+
+.o_form_view .o_tca_pint_col {
+    .o_inner_group {
+        // Default (stacked, col-12) — wide label fits long strings on 1 line.
+        // minmax(0, 1fr) on the input lets it shrink instead of overflowing.
+        grid-template-columns: 220px minmax(0, 1fr) !important;
+        row-gap: 0.6rem;
+        column-gap: 1rem;
+    }
+
+    > .o_inner_group > .o_horizontal_separator {
+        margin-bottom: 0.5rem;
+    }
+}
+
+// 3-up layout kicks in at xxl (≥1400px). Each section gets only ~1/3 viewport,
+// so the 220px label is too wide and forces inputs to overflow into the next
+// column. Tighten to 150px here — long labels wrap but inputs stay contained.
+@media (min-width: 1400px) {
+    .o_form_view .o_tca_pint_col .o_inner_group {
+        grid-template-columns: 150px minmax(0, 1fr) !important;
+        column-gap: 0.75rem;
+    }
+}

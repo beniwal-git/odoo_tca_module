@@ -1,0 +1,109 @@
+# Tooling config for the `account_tca_peppol` Odoo addon.
+# No [project] section — this repo is an Odoo addon, not a pip-installable
+# Python package. ruff + ruff-format + (optional) mypy live here.
+
+[tool.ruff]
+target-version = "py310"  # Odoo 19 supports Python 3.10+
+line-length = 100
+extend-exclude = [
+    "v17",
+    "v19",
+    "account_tca_peppol/data/schematron",
+    ".idea",
+    ".llm",
+]
+
+[tool.ruff.lint]
+# Strict-ish rule set chosen for the senior-engineering bar reported in
+# v19/REVIEW2_2026-05-20.md. Each family addresses a concrete dimension:
+#   E/F/W   baseline pyflakes
+#   I       isort — fixes the import-order drift the review flagged
+#   UP      pyupgrade — strips `# -*- coding -*-`, modernises py3 idioms
+#   B       bugbear — catches mutable defaults, bare excepts
+#   BLE     blind-except — flags every `except Exception`, decide per site
+#   G       logging-format — enforces lazy `%s` (no f-strings in log calls)
+#   LOG     logging best practices
+#   SIM     simplify
+#   RET     return-style
+#   PIE     misc anti-patterns
+#   PLE,PLW pylint errors + warnings (PLW2901 is opted out below — Odoo
+#           ORM loops legitimately rebind loop vars)
+#   TID    tidy-imports — blocks `from x import *`
+#   RUF    ruff-specific (dead noqa, unused imports)
+select = [
+    "E", "F", "W",
+    "I",
+    "UP",
+    "B",
+    "BLE",
+    "G",
+    "LOG",
+    "SIM",
+    "RET",
+    "PIE",
+    "PLE", "PLW",
+    "TID",
+    "RUF",
+]
+ignore = [
+    "E501",    # line-length handled by ruff-format
+    "E741",    # ambiguous `l` — Odoo upstream + this codebase use `l` in
+               # filter lambdas as the conventional move-line var; CQ5 will
+               # extract a `_tca_product_lines` helper that obsoletes most.
+    "PLW2901", # for-loop variable rebind — used legitimately in Odoo
+    "RUF012",  # mutable class attrs — Odoo selection lists and CN reasons
+    "RUF002",  # ambiguous unicode in docstrings — em-dashes used intentionally
+    "RUF003",  # ambiguous unicode in comments — em-dashes used intentionally
+    "B904",    # raise-from — Odoo idiom raises UserError without chaining
+    "RET503",  # explicit-return-None style — Odoo computes/onchanges drop it
+    "RET502",  # same — stylistic, not a correctness issue
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Re-exports in package __init__.py + literal SQL in the post_init hook.
+"account_tca_peppol/__init__.py" = ["F401"]
+"account_tca_peppol/*/__init__.py" = ["F401"]
+# Odoo manifest is a bare dict literal — the "useless expression" is the
+# whole point (Odoo reads it via ast.literal_eval).
+"account_tca_peppol/__manifest__.py" = ["B018"]
+# Tests legitimately use broad except + magic numbers in assertions.
+"account_tca_peppol/tests/*.py" = ["BLE001", "PLR2004"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["odoo"]
+section-order = [
+    "future",
+    "standard-library",
+    "third-party",
+    "first-party",
+    "local-folder",
+]
+
+[tool.ruff.format]
+# ruff-format follows Black-ish defaults; keep single-quotes since the
+# existing codebase uses them.
+quote-style = "single"
+indent-style = "space"
+docstring-code-format = false
+
+# ──────────────────────────────────────────────────────────────────────────
+# mypy — strict-typed only on the non-Odoo surface (services/ + controllers/).
+# The ORM models are intentionally left un-annotated; Odoo's `fields.X`
+# descriptors confuse static analysis and the cost/benefit isn't there.
+# ──────────────────────────────────────────────────────────────────────────
+
+[tool.mypy]
+python_version = "3.10"
+files = [
+    "account_tca_peppol/services",
+    "account_tca_peppol/controllers",
+]
+strict = true
+warn_unused_ignores = false  # Odoo runtime is dynamic; some `# type: ignore` are necessary
+show_error_codes = true
+pretty = true
+
+[[tool.mypy.overrides]]
+# Odoo itself isn't typed — silence import-untyped on Odoo modules.
+module = ["odoo.*"]
+ignore_missing_imports = true

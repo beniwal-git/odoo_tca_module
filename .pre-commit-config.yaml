@@ -1,0 +1,47 @@
+# Pre-commit hooks for the `account_tca_peppol` Odoo addon.
+# Install: `pip install pre-commit && pre-commit install`
+# Run on all files: `pre-commit run --all-files`
+
+repos:
+  # ── ruff: lint + auto-fix + format ───────────────────────────────────────
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.6.9
+    hooks:
+      - id: ruff
+        args: [--fix, --exit-non-zero-on-fix]
+      - id: ruff-format
+
+  # ── pylint-odoo: Odoo-specific checks ruff can't do ──────────────────────
+  # Catches: missing index= on fields used in search/cron, missing _() on
+  # user-facing strings, missing tracking, ACL gaps, manifest issues.
+  - repo: https://github.com/OCA/pylint-odoo
+    rev: v9.1.0
+    hooks:
+      - id: pylint_odoo
+        args:
+          - --disable=all
+          - --enable=odoolint
+          - --rcfile=/dev/null
+
+  # ── mypy: strict typing on the non-Odoo surface ──────────────────────────
+  # Only services/ + controllers/ (see pyproject.toml [tool.mypy]).
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.11.0
+    hooks:
+      - id: mypy
+        files: ^account_tca_peppol/(services|controllers)/
+        additional_dependencies:
+          - types-requests
+
+  # ── Misc hygiene ─────────────────────────────────────────────────────────
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: debug-statements        # catches stray `breakpoint()` / `pdb`
+      - id: check-added-large-files
+        args: [--maxkb=500]

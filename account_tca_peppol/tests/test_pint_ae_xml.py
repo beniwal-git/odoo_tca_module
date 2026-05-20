@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 # Part of TCA. See LICENSE file for full copyright and licensing details.
 """
 E2: XML generation — standard out_invoice
@@ -8,6 +7,10 @@ E4: Constraint / validation error tests (missing fields)
 
 from lxml import etree
 
+from odoo.addons.account_tca_peppol.constants import (
+    PINT_AE_CUSTOMIZATION_ID,
+    PINT_AE_PROFILE_ID,
+)
 from odoo.tests import tagged
 
 from .common import TcaTestCase
@@ -17,9 +20,6 @@ NS = {
     'cbc': 'urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2',
     'cac': 'urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2',
 }
-
-PINT_AE_CUSTOMIZATION_ID = 'urn:peppol:pint:billing-1@ae-1'
-PINT_AE_PROFILE_ID       = 'urn:peppol:bis:billing'
 
 
 def _find_text(tree, xpath):

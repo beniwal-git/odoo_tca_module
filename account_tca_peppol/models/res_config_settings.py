@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 # Part of TCA. See LICENSE file for full copyright and licensing details.
 """
 Bridge res.config.settings ↔ res.company for TCA fields.

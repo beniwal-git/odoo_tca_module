@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 # Part of TCA. See LICENSE file for full copyright and licensing details.
 """
 TCA Webhook Controller
@@ -25,7 +24,7 @@ import hmac
 import json
 import logging
 
-from odoo import http, _
+from odoo import _, http
 from odoo.http import request
 
 _logger = logging.getLogger(__name__)

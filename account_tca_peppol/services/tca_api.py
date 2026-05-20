@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 # Part of TCA. See LICENSE file for full copyright and licensing details.
 """
 TCA API Service — OAuth2 + document upload + invoice lifecycle
@@ -32,11 +31,11 @@ Resubmission:
 import json
 import logging
 import time
-from urllib.request import Request, urlopen
-from urllib.parse import urlencode, quote
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
 
-from odoo import models, _, api
+from odoo import _, api, models
 from odoo.exceptions import UserError
 
 _logger = logging.getLogger(__name__)
@@ -48,6 +47,41 @@ TOKEN_EXPIRY_BUFFER_SECONDS = 60   # refresh token 60 s before actual expiry
 # _tca_s3_upload_timeout below.
 DEFAULT_HTTP_TIMEOUT = 30           # seconds for general API calls
 DEFAULT_S3_UPLOAD_TIMEOUT = 120     # seconds for S3 PUT (larger files)
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Exception hierarchy
+#
+# All derive from `UserError` so existing call sites keep their UI behaviour
+# (the message reaches the user). The subclass is what callers branch on:
+#
+#   TcaError              — base for any TCA-side failure
+#   ├── TcaTransientError — retryable: network / timeout / 5xx / S3 hiccup.
+#   │                       Poll/retry loops should keep going.
+#   ├── TcaAuthError      — 401 or token-missing. Caller should re-auth, not retry.
+#   └── TcaPermanentError — 4xx other than 401, malformed response, input
+#                           validation. Retrying without changing input fails.
+#
+# Use isinstance(exc, TcaTransientError) instead of substring-matching
+# `'timeout' in str(exc).lower()` (which was the prior heuristic in
+# `account.move._tca_poll_single_invoice`).
+# ──────────────────────────────────────────────────────────────────────────
+
+
+class TcaError(UserError):
+    """Base for TCA API failures."""
+
+
+class TcaTransientError(TcaError):
+    """Network / timeout / 5xx — safe to retry after backoff."""
+
+
+class TcaAuthError(TcaError):
+    """Authentication failure — re-auth before retrying."""
+
+
+class TcaPermanentError(TcaError):
+    """Request rejected; retrying without changing input will fail identically."""
 
 
 class TcaApiService(models.AbstractModel):
@@ -162,7 +196,7 @@ class TcaApiService(models.AbstractModel):
         Stores tokens + org metadata in ir.config_parameter.
         """
         if not company.tca_client_id or not company.tca_client_secret:
-            raise UserError(_(
+            raise TcaAuthError(_(
                 'TCA credentials not configured for company "%s". '
                 'Go to Settings → Accounting → TCA E-Invoicing.', company.name
             ))
@@ -211,7 +245,7 @@ class TcaApiService(models.AbstractModel):
         expires_at = int(time.time()) + expires_in
 
         if not access_token:
-            raise UserError(_(
+            raise TcaAuthError(_(
                 'TCA did not return an access token. Response: %s', response
             ))
 
@@ -257,7 +291,7 @@ class TcaApiService(models.AbstractModel):
         Returns True on success.
         """
         if len(xml_bytes) > 64 * 1024 * 1024:
-            raise UserError(_('Invoice XML exceeds the 64 MB size limit.'))
+            raise TcaPermanentError(_('Invoice XML exceeds the 64 MB size limit.'))
 
         req = Request(
             upload_url,
@@ -271,14 +305,14 @@ class TcaApiService(models.AbstractModel):
             with urlopen(req, timeout=self._tca_s3_upload_timeout()) as resp:
                 status = resp.status
         except HTTPError as exc:
-            raise UserError(_(
+            raise TcaTransientError(_(
                 'S3 upload failed with HTTP %s: %s', exc.code, exc.reason
             )) from exc
         except URLError as exc:
-            raise UserError(_('S3 upload network error: %s', str(exc.reason))) from exc
+            raise TcaTransientError(_('S3 upload network error: %s', str(exc.reason))) from exc
 
         if status not in (200, 204):
-            raise UserError(_('S3 upload failed with unexpected status %s.', status))
+            raise TcaTransientError(_('S3 upload failed with unexpected status %s.', status))
 
         _logger.info('TCA: S3 upload complete (status %s)', status)
         return True
@@ -394,18 +428,18 @@ class TcaApiService(models.AbstractModel):
             or result.get('presigned_url')
         )
         if not download_url:
-            raise UserError(_('TCA did not return a download URL. Response: %s', result))
+            raise TcaPermanentError(_('TCA did not return a download URL. Response: %s', result))
 
         req = Request(download_url, method='GET')
         try:
             with urlopen(req, timeout=self._tca_http_timeout()) as resp:
                 return resp.read()
         except HTTPError as exc:
-            raise UserError(_(
+            raise TcaTransientError(_(
                 'S3 download failed (HTTP %s): %s', exc.code, exc.reason
             )) from exc
         except URLError as exc:
-            raise UserError(_('S3 download network error: %s', str(exc.reason))) from exc
+            raise TcaTransientError(_('S3 download network error: %s', str(exc.reason))) from exc
 
     @api.model
     def get_org_info(self, company):
@@ -509,7 +543,7 @@ class TcaApiService(models.AbstractModel):
                 detail = body or str(exc)
 
             if exc.code == 401:
-                raise UserError(_('TCA authentication failed (401). Check API credentials.')) from exc
+                raise TcaAuthError(_('TCA authentication failed (401). Check API credentials.')) from exc
             if exc.code == 409:
                 _logger.info('TCA: 409 duplicate — invoice already exists: %s', detail)
                 try:
@@ -541,12 +575,14 @@ class TcaApiService(models.AbstractModel):
                         )
                         return {**err_data, 'tca_duplicate': True}
             if exc.code == 422:
-                raise UserError(_('TCA validation error (422): %s', detail)) from exc
+                raise TcaPermanentError(_('TCA validation error (422): %s', detail)) from exc
 
-            raise UserError(_('TCA API error (HTTP %s): %s', exc.code, detail)) from exc
+            # 5xx → transient (server's fault, retry); 4xx → permanent (caller's fault).
+            cls = TcaTransientError if 500 <= exc.code < 600 else TcaPermanentError
+            raise cls(_('TCA API error (HTTP %s): %s', exc.code, detail)) from exc
 
         except URLError as exc:
-            raise UserError(_('Cannot reach TCA API: %s', str(exc.reason))) from exc
+            raise TcaTransientError(_('Cannot reach TCA API: %s', str(exc.reason))) from exc
 
         if raw:
             try:
@@ -557,7 +593,7 @@ class TcaApiService(models.AbstractModel):
             data = {}
 
         if status != expected_status and status not in (200, 201, 204):
-            raise UserError(_(
+            raise TcaPermanentError(_(
                 'Unexpected TCA API response status %s (expected %s).', status, expected_status
             ))
 

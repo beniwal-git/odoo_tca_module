@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 # Part of TCA. See LICENSE file for full copyright and licensing details.
 """
 Shared test fixtures for account_tca_peppol.

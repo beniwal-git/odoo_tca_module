@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 # Part of TCA. See LICENSE file for full copyright and licensing details.
 """
 Override of Odoo's account.move.reversal wizard.
@@ -13,7 +12,7 @@ an e-invoicing context: the user thinks they are looking at the credit note
 they will submit, when in fact they are looking at a new tax invoice.
 """
 
-from odoo import api, fields, models
+from odoo import _, api, fields, models
 
 # Import the same selection list so wizard and account.move stay in sync.
 from odoo.addons.account_tca_peppol.models.account_move import CREDIT_NOTE_REASONS
@@ -41,7 +40,7 @@ class AccountMoveReversal(models.TransientModel):
     @api.depends('company_id')
     def _compute_tca_company_is_active(self):
         for rec in self:
-            rec.tca_company_is_active = getattr(rec.company_id, 'tca_is_active', False)
+            rec.tca_company_is_active = bool(rec.company_id.tca_is_active)
 
     def _prepare_default_reversal(self, move):
         """EXTENDS account.move.reversal.
@@ -81,8 +80,6 @@ class AccountMoveReversal(models.TransientModel):
         ):
             return super().reverse_moves(is_modify=is_modify)
 
-        from odoo import _
-
         moves = self.move_ids
 
         # Build defaults from the wizard (includes tca_credit_note_reason via
@@ -99,7 +96,7 @@ class AccountMoveReversal(models.TransientModel):
         moves._message_log_batch(
             bodies={
                 move.id: _('This entry has been %s', reverse._get_html_link(title=_("reversed")))
-                for move, reverse in zip(moves, new_moves)
+                for move, reverse in zip(moves, new_moves, strict=True)
             }
         )
 

@@ -91,127 +91,139 @@
 
             <!-- ── UAE PINT AE fields — inline below customer details ─── -->
             <xpath expr="//notebook[page[@id='invoice_tab']]" position="before">
-                <group invisible="move_type not in ('out_invoice', 'out_refund', 'in_invoice', 'in_refund')">
-                    <!-- Row 1: core mandatory fields + UAE buyer legal (auto-shown) -->
-                    <group>
-                        <group string="Invoice &amp; Buyer">
-                            <!-- TCA fields are not view-level required: drafts can be saved
-                                 and the user can navigate internal links freely.
-                                 Mandatory-field enforcement runs at Confirm time via
-                                 _tca_validate_mandatory_fields() in account_move._post(). -->
-                            <!-- Invoice type code (380/381/480/81) is auto-set by the
-                                 (move_type, tca_is_out_of_scope) compute. Hidden — the
-                                 user toggles tca_is_out_of_scope below to switch between
-                                 Tax Invoice and Commercial Invoice. The field itself is
-                                 still read by the XML builder. -->
-                            <field name="tca_invoice_type_code" invisible="1"/>
-                            <field name="tca_is_out_of_scope"
-                                   readonly="move_type in ('in_invoice', 'in_refund') or reversed_entry_id"/>
-                            <field name="tca_buyer_reference"
-                                   placeholder="e.g. PO-001/23"
-                                   readonly="move_type in ('in_invoice', 'in_refund')"/>
-                            <field name="tca_buyer_participant_id" string="Buyer Participant ID (TRN)"
-                                   readonly="move_type in ('in_invoice', 'in_refund')"/>
-                            <field name="tca_buyer_emirate"
-                                   invisible="not tca_buyer_is_uae"
-                                   readonly="move_type in ('in_invoice', 'in_refund')"/>
-                            <field name="tca_credit_note_reason"
-                                   invisible="not tca_show_credit_note_fields"/>
-                        </group>
-                        <group string="Buyer Legal" invisible="not tca_buyer_is_uae">
-                            <field name="tca_buyer_legal_id_type"
-                                   readonly="move_type in ('in_invoice', 'in_refund')"/>
-                            <field name="tca_buyer_trade_license"
-                                   readonly="move_type in ('in_invoice', 'in_refund')"/>
-                            <field name="tca_buyer_legal_authority"
-                                   invisible="tca_buyer_legal_id_type != 'TL'"
-                                   readonly="move_type in ('in_invoice', 'in_refund')"/>
-                            <field name="tca_buyer_passport_country_id"
-                                   invisible="tca_buyer_legal_id_type != 'PAS'"
-                                   readonly="move_type in ('in_invoice', 'in_refund')"/>
-                        </group>
-                    </group>
-                    <!-- Row 2: Transaction Type (Optional) — collapsed by default.
-                         Toggle "Use Special Type" reveals 7 user-friendly checkboxes
-                         that compose the BTAE-02 string. Standard invoices: leave the
-                         toggle off (it auto-expands if any flag was set previously). -->
-                    <group>
-                        <group string="Transaction Type (Optional)"
-                               invisible="move_type in ('in_invoice', 'in_refund')">
-                            <field name="tca_show_special_flags" widget="boolean_toggle"/>
-                            <field name="tca_flag_free_trade_zone"
-                                   invisible="not tca_show_special_flags"/>
-                            <!-- ibr-157-ae: Deemed Supply, Margin Scheme and Summary
-                                 Invoice are forbidden on OOS (480 / 81) documents.
-                                 Hide them when the user has ticked "Out of Scope".
-                                 An onchange on tca_is_out_of_scope also auto-clears
-                                 any of these flags that were True so a hidden-but-set
-                                 value cannot leak through to Confirm. -->
-                            <field name="tca_flag_deemed_supply"
-                                   invisible="not tca_show_special_flags or tca_is_out_of_scope"/>
-                            <field name="tca_flag_margin_scheme"
-                                   invisible="not tca_show_special_flags or tca_is_out_of_scope"/>
-                            <field name="tca_flag_summary_invoice"
-                                   invisible="not tca_show_special_flags or tca_is_out_of_scope"/>
-                            <field name="tca_flag_continuous_supply"
-                                   invisible="not tca_show_special_flags"/>
-                            <field name="tca_flag_disclosed_agent"
-                                   invisible="not tca_show_special_flags"/>
-                            <field name="tca_flag_ecommerce"
-                                   invisible="not tca_show_special_flags"/>
-                            <!-- Raw BTAE-02 string kept invisible — computed from the
-                                 booleans above. Read by the XML builder. -->
-                            <field name="tca_transaction_type_flags" invisible="1"/>
-                        </group>
-                        <group string="Additional Details" invisible="move_type in ('in_invoice', 'in_refund') or (not tca_flag_disclosed_agent and not tca_flag_continuous_supply and not tca_flag_summary_invoice and not tca_is_export)">
-                            <field name="tca_principal_id"
-                                   invisible="not tca_flag_disclosed_agent"/>
-                            <field name="tca_contract_reference"
-                                   invisible="not tca_flag_continuous_supply"
-                                   placeholder="e.g. framework-1"/>
-                            <field name="tca_invoice_period_start"
-                                   invisible="not tca_flag_summary_invoice and not tca_flag_continuous_supply"/>
-                            <field name="tca_invoice_period_end"
-                                   invisible="not tca_flag_summary_invoice and not tca_flag_continuous_supply"/>
-                            <field name="tca_billing_frequency"
-                                   invisible="not tca_flag_continuous_supply"/>
-                            <field name="tca_export_declaration_number"
-                                   invisible="not tca_is_export"
-                                   placeholder="e.g. EXP-2026-001"/>
-                        </group>
+                <group col="1" invisible="move_type not in ('out_invoice', 'out_refund', 'in_invoice', 'in_refund')">
+                    <!-- Three equal columns using the full form width (33% each).
+                         Each col-md-4 is tagged `o_tca_pint_col`; SCSS in
+                         static/src/scss/account_move_form.scss sets a fixed 160px label
+                         column inside these sections so input cells always have
+                         ≥200px (visible 10-digit IDs, emirate codes, etc.). -->
+                    <div class="row g-4 mb-3 o_tca_pint_row"
+                         invisible="move_type in ('in_invoice', 'in_refund')">
+                        <div class="col-12 col-xxl o_tca_pint_col">
+                            <group string="Invoice &amp; Buyer">
+                                <!-- TCA fields are not view-level required: drafts can be saved
+                                     and the user can navigate internal links freely.
+                                     Mandatory-field enforcement runs at Confirm time via
+                                     _tca_validate_mandatory_fields() in account_move._post(). -->
+                                <!-- Invoice type code (380/381/480/81) is auto-set by the
+                                     (move_type, tca_is_out_of_scope) compute. Hidden — the
+                                     user toggles tca_is_out_of_scope below to switch between
+                                     Tax Invoice and Commercial Invoice. The field itself is
+                                     still read by the XML builder. -->
+                                <field name="tca_invoice_type_code" invisible="1"/>
+                                <field name="tca_is_out_of_scope"
+                                       readonly="move_type in ('in_invoice', 'in_refund') or reversed_entry_id"/>
+                                <field name="tca_buyer_reference" string="Buyer Reference"
+                                       placeholder="e.g. PO-001/23"
+                                       readonly="move_type in ('in_invoice', 'in_refund')"/>
+                                <field name="tca_buyer_participant_id" string="Buyer Participant ID"
+                                       readonly="move_type in ('in_invoice', 'in_refund')"/>
+                                <field name="tca_buyer_emirate"
+                                       invisible="not tca_buyer_is_uae"
+                                       readonly="move_type in ('in_invoice', 'in_refund')"/>
+                                <field name="tca_credit_note_reason" string="Credit Note Reason"
+                                       invisible="not tca_show_credit_note_fields"/>
+                            </group>
+                        </div>
+                        <div class="col-12 col-xxl o_tca_pint_col"
+                             invisible="not tca_buyer_is_uae">
+                            <group string="Buyer Legal">
+                                <field name="tca_buyer_legal_id_type" string="Buyer Legal ID Type"
+                                       readonly="move_type in ('in_invoice', 'in_refund')"/>
+                                <field name="tca_buyer_trade_license" string="Buyer Trade License / Reg. ID"
+                                       readonly="move_type in ('in_invoice', 'in_refund')"/>
+                                <field name="tca_buyer_legal_authority" string="Buyer Issuing Authority"
+                                       invisible="tca_buyer_legal_id_type != 'TL'"
+                                       readonly="move_type in ('in_invoice', 'in_refund')"/>
+                                <field name="tca_buyer_passport_country_id" string="Buyer Passport Country"
+                                       invisible="tca_buyer_legal_id_type != 'PAS'"
+                                       readonly="move_type in ('in_invoice', 'in_refund')"/>
+                            </group>
+                        </div>
+                        <div class="col-12 col-xxl o_tca_pint_col">
+                            <!-- Transaction Type (Optional) — collapsed by default.
+                                 Toggle "Use Special Type" reveals 7 user-friendly checkboxes
+                                 that compose the BTAE-02 string. Standard invoices: leave the
+                                 toggle off (it auto-expands if any flag was set previously). -->
+                            <group string="Transaction Type (Optional)">
+                                <field name="tca_show_special_flags" widget="boolean_toggle"/>
+                                <field name="tca_flag_free_trade_zone"
+                                       invisible="not tca_show_special_flags"/>
+                                <!-- ibr-157-ae: Deemed Supply, Margin Scheme and Summary
+                                     Invoice are forbidden on OOS (480 / 81) documents.
+                                     Hide them when the user has ticked "Out of Scope".
+                                     An onchange on tca_is_out_of_scope also auto-clears
+                                     any of these flags that were True so a hidden-but-set
+                                     value cannot leak through to Confirm. -->
+                                <field name="tca_flag_deemed_supply"
+                                       invisible="not tca_show_special_flags or tca_is_out_of_scope"/>
+                                <field name="tca_flag_margin_scheme"
+                                       invisible="not tca_show_special_flags or tca_is_out_of_scope"/>
+                                <field name="tca_flag_summary_invoice"
+                                       invisible="not tca_show_special_flags or tca_is_out_of_scope"/>
+                                <field name="tca_flag_continuous_supply"
+                                       invisible="not tca_show_special_flags"/>
+                                <field name="tca_flag_disclosed_agent"
+                                       invisible="not tca_show_special_flags"/>
+                                <field name="tca_flag_ecommerce"
+                                       invisible="not tca_show_special_flags"/>
+                                <!-- Raw BTAE-02 string kept invisible — computed from the
+                                     booleans above. Read by the XML builder. -->
+                                <field name="tca_transaction_type_flags" invisible="1"/>
+                            </group>
+                        </div>
+                    </div>
+                    <!-- Additional Details — its own row below the 3-col row, only visible when special flags ask for it. -->
+                    <group string="Additional Details"
+                           invisible="move_type in ('in_invoice', 'in_refund') or (not tca_flag_disclosed_agent and not tca_flag_continuous_supply and not tca_flag_summary_invoice and not tca_is_export)"
+                           class="mt-3">
+                        <field name="tca_principal_id" string="Principal TRN"
+                               invisible="not tca_flag_disclosed_agent"/>
+                        <field name="tca_contract_reference" string="Contract Reference"
+                               invisible="not tca_flag_continuous_supply"
+                               placeholder="e.g. framework-1"/>
+                        <field name="tca_invoice_period_start" string="Invoice Period Start"
+                               invisible="not tca_flag_summary_invoice and not tca_flag_continuous_supply"/>
+                        <field name="tca_invoice_period_end" string="Invoice Period End"
+                               invisible="not tca_flag_summary_invoice and not tca_flag_continuous_supply"/>
+                        <field name="tca_billing_frequency" string="Billing Frequency"
+                               invisible="not tca_flag_continuous_supply"/>
+                        <field name="tca_export_declaration_number" string="Export Declaration No."
+                               invisible="not tca_is_export"
+                               placeholder="e.g. EXP-2026-001"/>
                     </group>
                     <!-- Inbound only: read-only display of optional fields the seller populated.
                          Each field hides when empty to keep the panel clean. -->
                     <group string="Additional Information (from seller)"
                            invisible="move_type not in ('in_invoice', 'in_refund')">
-                        <group>
-                            <field name="tca_buyer_accounting_ref" readonly="1"
+                        <group class="pe-md-5">
+                            <field name="tca_buyer_accounting_ref" string="Buyer Accounting Ref" readonly="1"
                                    invisible="not tca_buyer_accounting_ref"/>
-                            <field name="tca_project_reference" readonly="1"
+                            <field name="tca_project_reference" string="Project Reference" readonly="1"
                                    invisible="not tca_project_reference"/>
-                            <field name="tca_contract_reference" readonly="1"
+                            <field name="tca_contract_reference" string="Contract Reference" readonly="1"
                                    invisible="not tca_contract_reference"/>
-                            <field name="tca_contract_value" readonly="1"
+                            <field name="tca_contract_value" string="Contract Value" readonly="1"
                                    invisible="not tca_contract_value"/>
-                            <field name="tca_billing_frequency" readonly="1"
+                            <field name="tca_billing_frequency" string="Billing Frequency" readonly="1"
                                    invisible="not tca_billing_frequency"/>
-                            <field name="tca_incoterms" readonly="1"
+                            <field name="tca_incoterms" string="Incoterms" readonly="1"
                                    invisible="not tca_incoterms"/>
-                            <field name="tca_principal_id" readonly="1"
+                            <field name="tca_principal_id" string="Principal TRN" readonly="1"
                                    invisible="not tca_principal_id"/>
                         </group>
                         <group>
-                            <field name="tca_tax_point_date" readonly="1"
+                            <field name="tca_tax_point_date" string="Tax Point Date" readonly="1"
                                    invisible="not tca_tax_point_date"/>
-                            <field name="tca_delivery_date" readonly="1"
+                            <field name="tca_delivery_date" string="Delivery Date" readonly="1"
                                    invisible="not tca_delivery_date"/>
-                            <field name="tca_invoice_period_start" readonly="1"
+                            <field name="tca_invoice_period_start" string="Invoice Period Start" readonly="1"
                                    invisible="not tca_invoice_period_start"/>
-                            <field name="tca_invoice_period_end" readonly="1"
+                            <field name="tca_invoice_period_end" string="Invoice Period End" readonly="1"
                                    invisible="not tca_invoice_period_end"/>
-                            <field name="tca_delivery_party_trn" readonly="1"
+                            <field name="tca_delivery_party_trn" string="Deliver-to Party TRN" readonly="1"
                                    invisible="not tca_delivery_party_trn"/>
-                            <field name="tca_export_declaration_number" readonly="1"
+                            <field name="tca_export_declaration_number" string="Export Declaration No." readonly="1"
                                    invisible="not tca_export_declaration_number"/>
                         </group>
                     </group>

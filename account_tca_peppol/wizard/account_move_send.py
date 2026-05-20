@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 # Part of TCA. See LICENSE file for full copyright and licensing details.
 """
 TCA Send-flow integration — Odoo 19.
@@ -131,7 +130,7 @@ class AccountMoveSend(models.AbstractModel):
 
             try:
                 invoice._tca_submit_outbound()
-            except Exception as exc:  # noqa: BLE001 — surface every failure
+            except Exception as exc:
                 _logger.exception(
                     "TCA: outbound submission failed for %s via Send & Print.",
                     invoice.name,

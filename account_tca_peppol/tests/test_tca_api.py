@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 # Part of TCA. See LICENSE file for full copyright and licensing details.
 """
 E5: OAuth2 token management — fetch, cache, proactive refresh
@@ -7,8 +6,7 @@ E6: Full 3-step send flow (get-upload-url → S3 PUT → POST /invoices/)
 
 import json
 import time
-from io import BytesIO
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 
 from odoo.tests import tagged
 
@@ -83,8 +81,6 @@ class TestTcaApiTokenManagement(TcaTestCase):
         with patch(_URLOPEN, return_value=_mock_http_response(_token_response())):
             self.api._fetch_new_token(self.company)
 
-        # The request body sent to the token endpoint should contain client_id
-        req = patch(_URLOPEN).__enter__
         # Re-capture the actual request object
         with patch(_URLOPEN, return_value=_mock_http_response(_token_response())) as m:
             self.api._fetch_new_token(self.company)
@@ -152,8 +148,8 @@ class TestTcaApiTokenManagement(TcaTestCase):
         full_auth_resp = _token_response()
         full_auth_resp['access_token'] = 'brand_new_token'
 
-        from urllib.error import HTTPError
         import io
+        from urllib.error import HTTPError
         # First call (refresh) raises 401; second call (full reauth) succeeds
         def side_effect(*args, **kwargs):
             req = args[0]

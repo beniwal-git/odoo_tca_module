@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 # Part of TCA. See LICENSE file for full copyright and licensing details.
 """
 Schematron validation for PINT AE XML using saxonche (Saxon C/Python binding).
@@ -16,7 +15,7 @@ import os
 import tempfile
 import threading
 
-from odoo import models, api, _
+from odoo import api, models
 
 _logger = logging.getLogger(__name__)
 
@@ -44,7 +43,7 @@ _processor_lock = threading.Lock()
 def _get_saxon_processor():
     """Return the module-level PySaxonProcessor singleton.
     Lazy-initialized on first call; thread-safe via double-checked locking."""
-    global _processor
+    global _processor  # noqa: PLW0603 — module-level lazy singleton (per-worker)
     if _processor is None:
         with _processor_lock:
             if _processor is None:

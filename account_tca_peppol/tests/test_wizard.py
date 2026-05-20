@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 # Part of TCA. See LICENSE file for full copyright and licensing details.
 """
 E7: _compute_enable_tca — TCA option visibility in Send & Print wizard

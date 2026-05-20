@@ -1,9 +1,15 @@
-# -*- coding: utf-8 -*-
 # Part of TCA. See LICENSE file for full copyright and licensing details.
 
-import re
-
-from odoo import fields, models, api, _
+from odoo import _, api, fields, models
+from odoo.addons.account_tca_peppol.constants import (
+    LEGACY_PLACEHOLDER_PARTICIPANT,
+    RE_EMAIL,
+    RE_PHONE,
+    RE_UAE_PARTICIPANT,
+    RE_UAE_TIN,
+    RE_UAE_TRN,
+    UAE_EMIRATES,
+)
 from odoo.exceptions import ValidationError
 
 # UAE-specific legal entity identifier type codes (schemeAgencyID values)
@@ -13,9 +19,6 @@ UAE_LEGAL_ID_TYPES = [
     ('PAS', 'Passport'),
     ('CD', 'Cabinet Decision'),
 ]
-
-# UAE Emirates codes for CountrySubentity validation (ibr-128-ae)
-UAE_EMIRATES = ['AUH', 'DXB', 'SHJ', 'UAQ', 'FUJ', 'AJM', 'RAK']
 
 
 class ResPartner(models.Model):
@@ -145,6 +148,38 @@ class ResPartner(models.Model):
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
+    def _tca_is_uae_party(self):
+        """True if this partner's country is the UAE (AE).
+
+        Centralises the `partner.country_id and partner.country_id.code == 'AE'`
+        predicate that was repeated in 10+ places across the addon. Callers
+        decide whether they want to pass a partner or its commercial form —
+        pass `partner.commercial_partner_id._tca_is_uae_party()` when the
+        check should be at the commercial-partner level.
+
+        Empty-recordset safe: returns False when called on an empty partner
+        (e.g. a draft invoice with `partner_id` not yet set). Matches the
+        boolean semantics of the original inline predicate.
+        """
+        if not self:
+            return False
+        self.ensure_one()
+        return bool(self.country_id and self.country_id.code == 'AE')
+
+    def _tca_emirate(self):
+        """The UAE Emirate code for this partner.
+
+        Falls back through: `tca_emirate` field → state code → empty string.
+        Used as the `cbc:CountrySubentity` value for AE addresses and the
+        ibr-128-ae validation source.
+
+        Empty-recordset safe: returns '' when called on an empty partner.
+        """
+        if not self:
+            return ''
+        self.ensure_one()
+        return self.tca_emirate or (self.state_id and self.state_id.code) or ''
+
     def _tca_get_tin(self):
         """
         Return the 10-digit UAE TIN for this partner.
@@ -169,26 +204,9 @@ class ResPartner(models.Model):
         return raw[:10]
 
     # ── Peppol endpoint validation override ──────────────────────────────────
-
-    # ── Format constraints ────────────────────────────────────────────────────
-    # UAE FTA: TIN is the first 10 digits of the 15-character TRN. Users keep
-    # storing the full TRN in `partner.vat`; the XML builder derives the
-    # 10-digit TIN for IBT-032 (PartyTaxScheme/CompanyID) at emission time.
-    # Both forms are therefore accepted by the validator.
-    #   - TRN: 15 chars, starts with 1 (legacy VAT registration number)
-    #   - TIN: 10 digits, starts with 1 (first 10 chars of TRN); IBT-032
-    # UAE Peppol Participant ID (EndpointID @schemeID=0235): 10 digits
-    # starting with "1" — happens to share the TIN shape, conceptually
-    # different identifier.
-    _RE_UAE_TRN = re.compile(r'^1[a-zA-Z0-9]{14}$')
-    _RE_UAE_TIN = re.compile(r'^1[0-9]{9}$')
-    _RE_UAE_PARTICIPANT = re.compile(r'^1[0-9]{9}$')
-    _RE_EMAIL = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
-    # Phone: allow digits + common separators (space, dash, parens, plus, dot).
-    # At least 7 digits total. Loose pattern — strict E.164 validation would
-    # need an external module.
-    _RE_PHONE = re.compile(r'^[\d\s\-\(\)\+\.]+$')
-    _UAE_PLACEHOLDER_PARTICIPANT = '1XXXXXXXXX'
+    # Format constraints (TRN / TIN / participant / email / phone regexes) live
+    # in `account_tca_peppol.constants` — imported at top of file. The legacy
+    # `1XXXXXXXXX` placeholder is `LEGACY_PLACEHOLDER_PARTICIPANT`.
 
     def _build_error_peppol_endpoint(self, eas, endpoint):
         """
@@ -201,9 +219,9 @@ class ResPartner(models.Model):
         if eas == '0235':
             if not endpoint:
                 return _('The UAE Peppol endpoint is required for EAS 0235.')
-            if endpoint == self._UAE_PLACEHOLDER_PARTICIPANT:
+            if endpoint == LEGACY_PLACEHOLDER_PARTICIPANT:
                 return None
-            if not self._RE_UAE_PARTICIPANT.match(endpoint):
+            if not RE_UAE_PARTICIPANT.match(endpoint):
                 return _(
                     'The UAE Peppol endpoint must be exactly 10 digits starting with "1" '
                     '(UAE Peppol Participant ID). The 15-digit TRN belongs in the "Tax ID" '
@@ -220,7 +238,7 @@ class ResPartner(models.Model):
         (e.g. `vat` for UAE EAS=0235) when the compute trigger fires. For UAE
         we treat the Peppol endpoint as a user-set identifier (Participant ID,
         10 digits) — distinct from the TRN. Auto-filling from vat would
-        produce 15-digit values that fail our `_RE_UAE_PARTICIPANT` regex.
+        produce 15-digit values that fail our `RE_UAE_PARTICIPANT` regex.
 
         Strategy: only delegate to the parent for records that currently have
         NO endpoint set. Records the user has already filled keep their value
@@ -273,7 +291,7 @@ class ResPartner(models.Model):
         for partner in self:
             if not partner.is_company:
                 continue
-            if not (partner.country_id and partner.country_id.code == 'AE'):
+            if not partner._tca_is_uae_party():
                 continue
             own_company = Company.search([('partner_id', '=', partner.id)], limit=1)
             if own_company:
@@ -288,14 +306,14 @@ class ResPartner(models.Model):
             # Accept the 15-char UAE TRN or the 10-digit TIN, both starting '1'.
             if partner.vat:
                 v = partner.vat.strip()
-                if not (self._RE_UAE_TRN.match(v) or self._RE_UAE_TIN.match(v)):
+                if not (RE_UAE_TRN.match(v) or RE_UAE_TIN.match(v)):
                     errors.append(_(
                         '"Tax ID" must be either the 15-character UAE TRN or the '
                         '10-digit TIN, both starting with "1". Current: "%s".', v
                     ))
 
             # ── Email format ─────────────────────────────────────────────────
-            if partner.email and not self._RE_EMAIL.match(partner.email.strip()):
+            if partner.email and not RE_EMAIL.match(partner.email.strip()):
                 errors.append(_(
                     '"Email" must be a valid email address (e.g. name@example.com). '
                     'Current: "%s".', partner.email
@@ -304,7 +322,7 @@ class ResPartner(models.Model):
             # ── Phone format ─────────────────────────────────────────────────
             phone_val = (partner.phone or '').strip()
             if phone_val:
-                if not self._RE_PHONE.match(phone_val):
+                if not RE_PHONE.match(phone_val):
                     errors.append(_(
                         '"Phone" may only contain digits, spaces, dashes, '
                         'parentheses, dots and a leading +. Current: "%s".',

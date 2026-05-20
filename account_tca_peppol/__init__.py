@@ -1,8 +1,4 @@
-# -*- coding: utf-8 -*-
-from . import models
-from . import services
-from . import wizard
-from . import controllers
+from . import controllers, models, services, wizard
 
 
 def _post_init_migrate_invoice_type_code(env):

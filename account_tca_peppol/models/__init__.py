@@ -1,8 +1,9 @@
-# -*- coding: utf-8 -*-
-from . import res_company
-from . import res_partner
-from . import res_config_settings
-from . import account_move
-from . import account_move_line
-from . import account_tax
-from . import account_edi_xml_pint_ae
+from . import (
+    account_edi_xml_pint_ae,
+    account_move,
+    account_move_line,
+    account_tax,
+    res_company,
+    res_config_settings,
+    res_partner,
+)

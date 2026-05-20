@@ -13,7 +13,7 @@ State machine (tca_move_state):
   * → rejected             Status poll: status = 3 (Rejected)
 
 Cancel block: invoices in processing/delivered/received states cannot be cancelled.
-_get_ubl_cii_builder_from_xml_tree: PINT AE CustomizationID routed to our builder.
+_get_import_file_type: PINT AE CustomizationID routed to our builder for inbound XML.
 """
 
 import logging
@@ -55,8 +55,14 @@ TCA_C3_UNABLE_TO_DELIVER   = 6
 # TCA C5 MLS status integer codes
 TCA_C5_ACCEPTED            = 4   # Buyer confirmed receipt
 
-# PINT AE CustomizationID — must be checked before the BIS3 urn:cen.eu prefix check
+# PINT AE CustomizationID values — must be checked before the BIS3 urn:cen.eu
+# prefix check, as they do not start with urn:cen.eu:en16931:2017.
 PINT_AE_CUSTOMIZATION_ID = 'urn:peppol:pint:billing-1@ae-1'
+PINT_AE_SELFBILLING_CUSTOMIZATION_ID = 'urn:peppol:pint:selfbilling-1@ae-1'
+PINT_AE_CUSTOMIZATION_IDS = frozenset([
+    PINT_AE_CUSTOMIZATION_ID,
+    PINT_AE_SELFBILLING_CUSTOMIZATION_ID,
+])
 
 
 class AccountMove(models.Model):
@@ -493,14 +499,38 @@ class AccountMove(models.Model):
     # (the OOS classification of a received document is fixed by the seller).
     tca_is_out_of_scope = fields.Boolean(
         string='Out of Scope (Commercial Invoice)',
-        default=False,
+        compute='_compute_tca_is_out_of_scope',
+        store=True,
+        readonly=False,
         copy=True,
+        default=False,
         help='Tick to issue a Commercial Invoice — a document NOT subject to '
              'UAE VAT (PINT AE code 480, or 81 for credit notes). '
              'Examples: financial services, supplies outside the UAE VAT scope, '
              'transactions with non-residents. Leave unticked for standard Tax '
-             'Invoices (codes 380 / 381).',
+             'Invoices (codes 380 / 381). On a credit note that reverses an '
+             'invoice this value is auto-mirrored from the original (and is '
+             'readonly in the UI) so the PINT AE pair stays valid: 381 reverses '
+             '380, 81 reverses 480.',
     )
+
+    @api.depends('move_type', 'reversed_entry_id', 'reversed_entry_id.tca_is_out_of_scope')
+    def _compute_tca_is_out_of_scope(self):
+        """Mirror the original invoice's OOS flag onto a reversing credit note.
+
+        PINT AE pairs invoice types by direction: 381 reverses 380, 81 reverses
+        480. Letting the user flip OOS independently on the credit note would
+        produce a 380→81 or 480→381 mismatch and a non-compliant XML.
+
+        For credit notes WITH a `reversed_entry_id` we force-mirror the source.
+        For everything else (standalone credit notes, plain invoices) the
+        compute leaves the field untouched — `readonly=False` keeps it freely
+        editable in the UI, and the view adds `readonly="reversed_entry_id"`
+        so the toggle is also locked for reversal credit notes.
+        """
+        for move in self:
+            if move.reversed_entry_id and move.move_type in ('out_refund', 'in_refund'):
+                move.tca_is_out_of_scope = move.reversed_entry_id.tca_is_out_of_scope
 
     @api.onchange('tca_is_out_of_scope')
     def _onchange_tca_is_out_of_scope(self):
@@ -1067,7 +1097,7 @@ class AccountMove(models.Model):
             self.company_id.tca_is_active
             and self.state == 'posted'
             and not self.tca_is_inbound
-            and self.partner_id.commercial_partner_id.ubl_cii_format == 'ubl_pint_ae'
+            and self.partner_id.commercial_partner_id.invoice_edi_format == 'ubl_pint_ae'
             and self.tca_move_state in ('not_sent', 'error', 'rejected')
         )
 
@@ -1137,23 +1167,23 @@ class AccountMove(models.Model):
 
         # ── Document level ───────────────────────────────────────────────────
         if not invoice.tca_invoice_type_code:
-            errors.append(
+            errors.append(_(
                 '"Invoice Type Code" is required. '
                 'Select the invoice type (e.g. 380) in the "Invoice & Buyer" section on the invoice form.'
-            )
+            ))
 
         if not invoice.invoice_date:
-            errors.append('"Invoice Date" is required.')
+            errors.append(_('"Invoice Date" is required.'))
 
         if not invoice.currency_id:
-            errors.append('"Currency" is required.')
+            errors.append(_('"Currency" is required.'))
 
         type_code = invoice.tca_invoice_type_code or ''
         is_credit_note = type_code in ('381', '381_sb', '81')
 
         # IBT-009: Payment Due Date — mandatory for ALL invoice types incl. credit notes
         if not invoice.invoice_date_due and not invoice.invoice_payment_term_id:
-            errors.append('"Due Date" or "Payment Terms" is required.')
+            errors.append(_('"Due Date" or "Payment Terms" is required.'))
 
         # ── IBT-010: Buyer Reference ─────────────────────────────────────────
         # Optional per PINT AE BIS — no schematron rule enforces it.
@@ -1162,88 +1192,89 @@ class AccountMove(models.Model):
 
         # ── Buyer Participant ID ─────────────────────────────────────────────
         if not invoice.tca_buyer_participant_id:
-            errors.append(
+            errors.append(_(
                 '"Buyer Participant ID" is required. '
                 'Enter the buyer\'s Peppol Participant ID in the "Invoice & Buyer" section.'
-            )
+            ))
 
         # ── Transaction type flags ───────────────────────────────────────────
         flags = (invoice.tca_transaction_type_flags or '').strip()
         if not flags:
-            errors.append(
+            errors.append(_(
                 '"Transaction Type Flags" is required. '
                 'Set it to "00000000" for standard invoices in the "Transaction Type" section.'
-            )
+            ))
         elif len(flags) != 8 or not all(c in '01' for c in flags):
-            errors.append(
-                f'"Transaction Type Flags" must be exactly 8 digits of 0 or 1. Current: "{flags}".'
-            )
+            errors.append(_(
+                '"Transaction Type Flags" must be exactly 8 digits of 0 or 1. Current: "%s".',
+                flags,
+            ))
 
         # ── Credit note reason ───────────────────────────────────────────────
         if is_credit_note and not invoice.tca_credit_note_reason:
-            errors.append(
+            errors.append(_(
                 '"Credit Note Reason" is required for credit notes. '
                 'Set it in the "Invoice & Buyer" section.'
-            )
+            ))
 
         # ── Disclosed agent → Principal TRN ──────────────────────────────────
         if len(flags) == 8 and flags[5] == '1' and not invoice.tca_principal_id:
-            errors.append(
+            errors.append(_(
                 'Disclosed Agent flag is set — "Principal TRN" is required. '
                 'Set it in the "Transaction Type" section.'
-            )
+            ))
 
         # ── Summary / Continuous → Invoice Period ────────────────────────────
         if len(flags) == 8 and flags[3] == '1':
             if not getattr(invoice, 'tca_invoice_period_start', None) or not getattr(invoice, 'tca_invoice_period_end', None):
-                errors.append(
+                errors.append(_(
                     'Summary Invoice flag is set — "Invoice Period Start" and "End" dates are required.'
-                )
+                ))
         if len(flags) == 8 and flags[4] == '1':
             if not getattr(invoice, 'tca_invoice_period_start', None) or not getattr(invoice, 'tca_invoice_period_end', None):
-                errors.append(
+                errors.append(_(
                     'Continuous Supply flag is set — "Invoice Period Start" and "End" dates are required.'
-                )
+                ))
             if not invoice.tca_contract_reference:
-                errors.append(
+                errors.append(_(
                     'Continuous Supply flag is set — "Contract Reference" is required.'
-                )
+                ))
 
         # ── Seller (company) mandatory fields ────────────────────────────────
         if not supplier.name:
-            errors.append('Your company name (IBT-027) is missing. Set it in Settings → Companies.')
+            errors.append(_('Your company name (IBT-027) is missing. Set it in Settings → Companies.'))
 
         if not supplier.vat and getattr(supplier, 'peppol_eas', '') == '0235':
-            errors.append('Your company\'s "Tax ID" (TRN, IBT-031) is missing. Set it in Settings → Companies.')
+            errors.append(_('Your company\'s "Tax ID" (TRN, IBT-031) is missing. Set it in Settings → Companies.'))
 
         if not supplier.street:
-            errors.append('Your company\'s "Street" (IBT-035) address is missing.')
+            errors.append(_('Your company\'s "Street" (IBT-035) address is missing.'))
 
         if not supplier.city:
-            errors.append('Your company\'s "City" (IBT-037) is missing.')
+            errors.append(_('Your company\'s "City" (IBT-037) is missing.'))
 
         if not supplier.country_id:
-            errors.append('Your company\'s "Country" (IBT-040) is missing.')
+            errors.append(_('Your company\'s "Country" (IBT-040) is missing.'))
 
         if supplier.country_id and supplier.country_id.code == 'AE':
             emirate = getattr(supplier, 'tca_emirate', '') or (supplier.state_id and supplier.state_id.code) or ''
             if emirate not in ('AUH', 'DXB', 'SHJ', 'UAQ', 'FUJ', 'AJM', 'RAK'):
-                errors.append(
+                errors.append(_(
                     'Your company\'s "Emirate" must be set to one of: '
                     'AUH, DXB, SHJ, UAQ, FUJ, AJM, RAK.'
-                )
+                ))
 
         if not getattr(supplier, 'peppol_eas', None) or not getattr(supplier, 'peppol_endpoint', None):
-            errors.append('Your company\'s "Peppol EAS" and "Peppol Endpoint" (IBT-034) are missing.')
+            errors.append(_('Your company\'s "Peppol EAS" and "Peppol Endpoint" (IBT-034) are missing.'))
 
         # ibr-134-ae: Seller TRN (IBT-031) required, except for OOS / certain CN types
         type_code = invoice.tca_invoice_type_code or ''
         is_oos = type_code in ('480', '81')
         if not is_oos and not supplier.vat:
-            errors.append(
+            errors.append(_(
                 '[ibr-134-ae] Your company\'s "Tax ID" (TRN, IBT-031) is required. '
                 'Set it in Settings → Companies. (Required unless invoice type is Out-of-Scope.)'
-            )
+            ))
 
         # IBT-030: Seller legal registration ID
         seller_legal_reg = (
@@ -1252,10 +1283,10 @@ class AccountMove(models.Model):
             or supplier.vat
         )
         if not seller_legal_reg:
-            errors.append(
+            errors.append(_(
                 'Your company\'s "Trade License / Registration ID" (IBT-030) is missing. '
                 'Set it on the company partner record → "E-Invoicing" tab.'
-            )
+            ))
 
         # ibr-181-ae: BTAE-15 Seller Legal ID Type required when EAS=0235 + legal reg ID provided
         if (
@@ -1263,32 +1294,34 @@ class AccountMove(models.Model):
             and seller_legal_reg
             and not getattr(supplier, 'tca_legal_id_type', None)
         ):
-            errors.append(
+            errors.append(_(
                 '[ibr-181-ae] Your company\'s "Legal ID Type" (BTAE-15) is required. '
                 'Set it to TL / EID / PAS / CD on the company partner record → "E-Invoicing" tab.'
-            )
+            ))
 
         # Seller authority required when type=TL
         if getattr(supplier, 'tca_legal_id_type', '') == 'TL' and not getattr(supplier, 'tca_legal_authority', None):
-            errors.append(
+            errors.append(_(
                 'Your company\'s "Issuing Authority" (BTAE-12) is required when Legal ID Type is Trade License. '
                 'Set it on the company partner record → "E-Invoicing" tab.'
-            )
+            ))
 
         # Seller passport country required when type=PAS
         if getattr(supplier, 'tca_legal_id_type', '') == 'PAS' and not getattr(supplier, 'tca_passport_country_id', None):
-            errors.append(
+            errors.append(_(
                 'Your company\'s "Passport Issuing Country" (BTAE-18) is required when Legal ID Type is Passport. '
                 'Set it on the company partner record → "E-Invoicing" tab.'
-            )
+            ))
 
         # ibr-141-ae: Tax point date must be strictly before invoice date
         if invoice.tca_tax_point_date and invoice.invoice_date:
             if invoice.tca_tax_point_date >= invoice.invoice_date:
-                errors.append(
+                errors.append(_(
                     '[ibr-141-ae] "Tax Point Date" (IBT-007) must be strictly before "Invoice Date" (IBT-002). '
-                    f'Tax point: {invoice.tca_tax_point_date}, Invoice date: {invoice.invoice_date}.'
-                )
+                    'Tax point: %(tp)s, Invoice date: %(d)s.',
+                    tp=invoice.tca_tax_point_date,
+                    d=invoice.invoice_date,
+                ))
 
         # ── Buyer mandatory fields ───────────────────────────────────────────
         # Match official schematron scope: UAE-specific buyer checks fire only when
@@ -1298,17 +1331,18 @@ class AccountMove(models.Model):
         # Foreign-buyer (export) flow: minimal checks only.
 
         if not customer.name:
-            errors.append('Customer name (IBT-044) is missing.')
+            errors.append(_('Customer name (IBT-044) is missing.'))
 
         if not customer.country_id:
-            errors.append(f'Customer "{customer.name}" is missing a "Country" (IBT-055).')
+            errors.append(_('Customer "%s" is missing a "Country" (IBT-055).', customer.name))
 
         # IBT-049: Buyer Peppol electronic address — always required for Peppol routing
         if not getattr(customer, 'peppol_eas', None) or not getattr(customer, 'peppol_endpoint', None):
-            errors.append(
-                f'Customer "{customer.name}" is missing "Peppol EAS" and/or "Peppol Endpoint" (IBT-049). '
-                'Open the customer record → "Accounting" tab.'
-            )
+            errors.append(_(
+                'Customer "%s" is missing "Peppol EAS" and/or "Peppol Endpoint" (IBT-049). '
+                'Open the customer record → "Accounting" tab.',
+                customer.name,
+            ))
 
         # ── Branch: UAE buyer vs foreign buyer ────────────────────────────────
         buyer_is_uae = customer.country_id and customer.country_id.code == 'AE'
@@ -1320,100 +1354,101 @@ class AccountMove(models.Model):
 
             # IBT-048: Buyer VAT identifier (TRN)
             if not customer.vat and getattr(customer, 'peppol_eas', '') == '0235':
-                errors.append(
-                    f'Customer "{customer.name}" is missing "Tax ID" (TRN, IBT-048). '
-                    'Set it on the customer record.'
-                )
+                errors.append(_(
+                    'Customer "%s" is missing "Tax ID" (TRN, IBT-048). '
+                    'Set it on the customer record.',
+                    customer.name,
+                ))
 
             # IBT-050: Buyer street (ibr-143/144-ae for AE party)
             if not customer.street:
-                errors.append(f'Customer "{customer.name}" is missing "Street" (IBT-050).')
+                errors.append(_('Customer "%s" is missing "Street" (IBT-050).', customer.name))
 
             # IBT-052: Buyer city
             if not customer.city:
-                errors.append(f'Customer "{customer.name}" is missing "City" (IBT-052).')
+                errors.append(_('Customer "%s" is missing "City" (IBT-052).', customer.name))
 
             # ibr-128-ae: Buyer Emirate when country=AE
             if invoice.tca_buyer_emirate not in _UAE_EMIRATES:
-                errors.append(
+                errors.append(_(
                     '"Buyer Emirate" is required for UAE customers. '
                     'Set it in the "Invoice & Buyer" section '
                     '(AUH/DXB/SHJ/UAQ/FUJ/AJM/RAK), or set it once on the customer record.'
-                )
+                ))
 
             # ibr-149-ae: Buyer legal reg ID (IBT-047) when EAS=0235 + endpoint != placeholder
             if not invoice.tca_buyer_trade_license:
-                errors.append(
+                errors.append(_(
                     '"Buyer Trade License / Reg. ID" (IBT-047) is required. '
                     'Set it in the "Buyer Legal" section, '
                     'or set it once on the customer record.'
-                )
+                ))
 
             # BTAE-16: Buyer legal ID type
             if not invoice.tca_buyer_legal_id_type:
-                errors.append(
+                errors.append(_(
                     '"Buyer Legal ID Type" (BTAE-16) is required. '
                     'Set it to TL / EID / PAS / CD in the "Buyer Legal" section.'
-                )
+                ))
 
             # ibr-101-ae: Buyer authority required when type=TL
             if invoice.tca_buyer_legal_id_type == 'TL' and not invoice.tca_buyer_legal_authority:
-                errors.append(
+                errors.append(_(
                     '"Buyer Issuing Authority" (BTAE-11) is required when Legal ID Type is Trade License. '
                     'Set it in the "Buyer Legal" section.'
-                )
+                ))
 
             # ibr-010-ae: Buyer passport country required when type=PAS
             if invoice.tca_buyer_legal_id_type == 'PAS' and not invoice.tca_buyer_passport_country_id:
-                errors.append(
+                errors.append(_(
                     '"Buyer Passport Country" (BTAE-19) is required when Legal ID Type is Passport. '
                     'Set it in the "Buyer Legal" section.'
-                )
+                ))
         # else: foreign / anonymous buyer — UAE-specific buyer checks skip.
         # Schematron rules ibr-149-ae and friends won't fire either, so XML still passes.
 
         # ── Invoice lines ────────────────────────────────────────────────────
         product_lines = invoice.invoice_line_ids.filtered(lambda l: l.display_type == 'product')
         if not product_lines:
-            errors.append('The invoice has no lines. Add at least one product or service line.')
+            errors.append(_('The invoice has no lines. Add at least one product or service line.'))
 
         for line in product_lines:
-            label = line.name or (line.product_id and line.product_id.name) or f'Line {line.sequence}'
+            label = line.name or (line.product_id and line.product_id.name) or _('Line %s', line.sequence)
 
             # IBT-129: Invoiced quantity
             if not line.quantity:
-                errors.append(f'Line "{label}": "Quantity" (IBT-129) is required and cannot be zero.')
+                errors.append(_('Line "%s": "Quantity" (IBT-129) is required and cannot be zero.', label))
                 break
 
             # IBT-130: Unit of measure
             if not line.product_uom_id:
-                errors.append(f'Line "{label}": "Unit of Measure" (IBT-130) is required.')
+                errors.append(_('Line "%s": "Unit of Measure" (IBT-130) is required.', label))
                 break
 
             # IBT-153: Item name
             if not line.name and not (line.product_id and line.product_id.name):
-                errors.append(f'Line {line.sequence}: "Description" or product name (IBT-153) is required.')
+                errors.append(_('Line %s: "Description" or product name (IBT-153) is required.', line.sequence))
                 break
 
             if not line.tax_ids:
-                errors.append(f'Line "{label}": at least one Tax must be applied.')
+                errors.append(_('Line "%s": at least one Tax must be applied.', label))
                 break
 
             ct = line.tca_effective_commodity_type
             if ct == 'G' and not line.tca_hs_code:
-                errors.append(f'Line "{label}": Item type is Goods — "HS Code" is mandatory.')
+                errors.append(_('Line "%s": Item type is Goods — "HS Code" is mandatory.', label))
                 break
             if ct == 'S' and not getattr(line, 'tca_service_accounting_code', None):
-                errors.append(f'Line "{label}": Item type is Services — "Service Accounting Code" is mandatory.')
+                errors.append(_('Line "%s": Item type is Services — "Service Accounting Code" is mandatory.', label))
                 break
             if ct == 'B' and (not line.tca_hs_code or not getattr(line, 'tca_service_accounting_code', None)):
-                errors.append(f'Line "{label}": Item type is Both — both "HS Code" and "Service Accounting Code" are mandatory.')
+                errors.append(_('Line "%s": Item type is Both — both "HS Code" and "Service Accounting Code" are mandatory.', label))
                 break
 
             # Reverse charge lines need RC description
             has_rc = any(getattr(t, 'tca_tax_category', '') == 'AE' for t in line.tax_ids)
             if has_rc and not line.tca_rc_description:
-                errors.append(f'Line "{label}": Reverse Charge tax — "Goods/Services Type" is mandatory.')
+                errors.append(_('Line "%s": Reverse Charge tax — "Goods/Services Type" is mandatory.', label))
                 break
 
         return errors
@@ -1424,45 +1459,43 @@ class AccountMove(models.Model):
         Returns a list of error messages (empty = all OK).
 
         Two tiers — same checks the Send & Print wizard does:
-          Tier 1: builder._export_invoice_constraints — vals-based PINT AE rules
-                  (replicates ~30 schematron rules in Python; no XML render needed)
-          Tier 2: saxonche schematron — runs official PINT AE XSLT against
-                  rendered XML. Skipped gracefully when saxonche not installed.
+          Tier 1: builder._export_invoice — renders the PINT AE XML and runs
+                  _export_invoice_constraints internally (vals-based PINT AE
+                  rules, ~30 schematron rules replicated in Python). Returns
+                  (xml, errors).
+          Tier 2: saxonche schematron — runs the official PINT AE XSLT against
+                  the rendered XML. Skipped gracefully when saxonche not
+                  installed.
         """
         self.ensure_one()
         errors = []
         builder = self.env['account.edi.xml.ubl_pint_ae']
 
-        # ── Tier 1: vals-based PINT AE constraints ──────────────────────────
+        # ── Tier 1: render XML + vals-based PINT AE constraints ─────────────
+        # Odoo 19: _export_invoice builds the node tree, runs
+        # _export_invoice_constraints internally, and returns (xml, errors) —
+        # there is no separate _export_invoice_vals entry point any more.
         try:
-            vals = builder._export_invoice_vals(self)
-            constraints = builder._export_invoice_constraints(self, vals)
-            # Parent returns {key: None} for passed checks — filter None values
-            for v in constraints.values():
-                if v:
-                    errors.append(v)
+            xml_content, build_errors = builder._export_invoice(self)
         except Exception as exc:
-            _logger.exception('TCA: failed to build PINT AE vals for validation')
-            errors.append(_('Internal error building PINT AE vals: %s', exc))
+            _logger.exception('TCA: failed to render PINT AE XML for validation')
+            errors.append(_('Internal error rendering PINT AE XML: %s', exc))
             return errors
+        for be in (build_errors or ()):
+            if be:
+                errors.append(str(be).strip())
 
-        # ── Tier 2: schematron on rendered XML ──────────────────────────────
+        # ── Tier 2: schematron on the rendered XML ──────────────────────────
         sch = self.env['tca.schematron.validator']
-        if sch.is_available():
+        if xml_content and sch.is_available():
             try:
-                xml_content, build_errors = builder._export_invoice(self)
-                if build_errors:
-                    for be in (build_errors if isinstance(build_errors, (list, set, tuple)) else [build_errors]):
-                        if be:
-                            errors.append(str(be))
-                if xml_content:
-                    xml_bytes = xml_content if isinstance(xml_content, bytes) else xml_content.encode()
-                    is_cn = self.move_type in ('out_refund', 'in_refund')
-                    result = sch.validate_xml(xml_bytes, is_credit_note=is_cn)
-                    if not result.get('skipped') and not result.get('valid'):
-                        for fatal in result.get('fatal_errors', []):
-                            msg = fatal.get('message') or fatal.get('rule_id') or 'Schematron error'
-                            errors.append(msg.strip())
+                xml_bytes = xml_content if isinstance(xml_content, bytes) else xml_content.encode()
+                is_cn = self.move_type in ('out_refund', 'in_refund')
+                result = sch.validate_xml(xml_bytes, is_credit_note=is_cn)
+                if not result.get('skipped') and not result.get('valid'):
+                    for fatal in result.get('fatal_errors', []):
+                        msg = fatal.get('message') or fatal.get('rule_id') or 'Schematron error'
+                        errors.append(msg.strip())
             except Exception as exc:
                 _logger.exception('TCA: schematron validation crashed at post')
                 errors.append(_('Schematron validation crashed: %s', exc))
@@ -1618,7 +1651,7 @@ class AccountMove(models.Model):
             if (
                 move.company_id.tca_is_active
                 and move.is_sale_document()
-                and partner.ubl_cii_format == 'ubl_pint_ae'
+                and partner.invoice_edi_format == 'ubl_pint_ae'
             ):
                 errors = move._tca_validate_mandatory_fields()
                 if errors:
@@ -1689,22 +1722,28 @@ class AccountMove(models.Model):
         return result
 
     # ──────────────────────────────────────────────────────────────────────────
-    # INBOUND XML ROUTING — register PINT AE in the builder dispatch table
+    # INBOUND XML ROUTING — register PINT AE in the import-format dispatch table
     # ──────────────────────────────────────────────────────────────────────────
 
     @api.model
-    def _get_ubl_cii_builder_from_xml_tree(self, tree):
+    def _get_import_file_type(self, file_data):
         """
         EXTENDS account_edi_ubl_cii.
-        Check for PINT AE CustomizationID BEFORE the generic BIS3 prefix check,
-        because PINT AE's urn:peppol:pint:billing-1@ae-1 does NOT start with
-        urn:cen.eu:en16931:2017 and would otherwise fall through unmatched.
+        Route inbound PINT AE XML to the account.edi.xml.ubl_pint_ae builder.
+
+        In Odoo 19 inbound UBL/CII files are routed to a builder by
+        _get_import_file_type, which returns the builder model name and reads
+        the XML root CustomizationID. We must match PINT AE BEFORE delegating
+        to super(), because PINT AE's CustomizationID
+        (urn:peppol:pint:billing-1@ae-1 / urn:peppol:pint:selfbilling-1@ae-1)
+        does NOT start with urn:cen.eu:en16931:2017 and would otherwise fall
+        through unmatched.
         """
-        customization_id = tree.find('{*}CustomizationID')
-        if customization_id is not None:
-            if customization_id.text == PINT_AE_CUSTOMIZATION_ID:
-                return self.env['account.edi.xml.ubl_pint_ae']
-        return super()._get_ubl_cii_builder_from_xml_tree(tree)
+        if (tree := file_data.get('xml_tree')) is not None:
+            customization_id = tree.findtext('{*}CustomizationID')
+            if customization_id in PINT_AE_CUSTOMIZATION_IDS:
+                return 'account.edi.xml.ubl_pint_ae'
+        return super()._get_import_file_type(file_data)
 
     # ──────────────────────────────────────────────────────────────────────────
     # STATUS UPDATE (called from webhook and cron)
@@ -2043,7 +2082,8 @@ class AccountMove(models.Model):
             return None
 
         # Use Odoo's standard UBL import pipeline.
-        # _create_document_from_attachment routes via _get_ubl_cii_builder_from_xml_tree
+        # _create_document_from_attachment routes via _get_import_file_type
+        # (Odoo 19; replaces the removed _get_ubl_cii_builder_from_xml_tree)
         # which correctly routes PINT AE CustomizationID to our builder.
         try:
             move = journal.with_context(
@@ -2158,7 +2198,7 @@ class AccountMove(models.Model):
         company = self.company_id
 
         # Generate fresh XML
-        builder = self.partner_id.commercial_partner_id._get_edi_builder()
+        builder = self.env['account.edi.xml.ubl_pint_ae']
         xml_content, errors = builder._export_invoice(self)
         if errors:
             raise UserError(_('PINT AE XML generation failed:\n%s', '\n'.join(errors)))

@@ -106,7 +106,7 @@
                                  still read by the XML builder. -->
                             <field name="tca_invoice_type_code" invisible="1"/>
                             <field name="tca_is_out_of_scope"
-                                   readonly="move_type in ('in_invoice', 'in_refund')"/>
+                                   readonly="move_type in ('in_invoice', 'in_refund') or reversed_entry_id"/>
                             <field name="tca_buyer_reference"
                                    placeholder="e.g. PO-001/23"
                                    readonly="move_type in ('in_invoice', 'in_refund')"/>
@@ -219,7 +219,7 @@
             </xpath>
 
             <!-- ── Invoice line columns: UAE fields ────────────────────── -->
-            <xpath expr="//field[@name='invoice_line_ids']/tree/field[@name='price_unit']" position="after">
+            <xpath expr="//field[@name='invoice_line_ids']/list/field[@name='price_unit']" position="after">
                 <field name="tca_commodity_type" optional="show" string="Commodity (UAE)"/>
                 <field name="tca_hs_code" optional="show" string="HS Code"/>
                 <field name="tca_service_accounting_code" optional="hide" string="SAC"/>
@@ -238,7 +238,7 @@
         <field name="model">account.move</field>
         <field name="inherit_id" ref="account.view_invoice_tree"/>
         <field name="arch" type="xml">
-            <xpath expr="//tree" position="inside">
+            <xpath expr="//list" position="inside">
                 <field name="tca_move_state" optional="hide" string="TCA Status"
                        widget="badge"
                        decoration-success="tca_move_state in ('delivered', 'buyer_confirmed', 'inbound_received')"
@@ -275,50 +275,14 @@
 
     <!-- ══════════════════════════════════════════════════════════════════════
          SEND & PRINT WIZARD: TCA checkbox
+
+         Odoo 19 migration: the Send & Print wizard was rewritten. The old
+         account.move.send form view (account.account_move_send_form) and its
+         per-EDI checkbox fields no longer exist — the new account.move.send.wizard
+         renders additional EDIs from a JSON `extra_edis` registry. The TCA send
+         option will be re-added via that registry; no inherited view record is
+         needed here. (Previous record: view_account_move_send_form_tca — removed.)
          ══════════════════════════════════════════════════════════════════════ -->
-    <record id="view_account_move_send_form_tca" model="ir.ui.view">
-        <field name="name">account.move.send.form.tca.peppol</field>
-        <field name="model">account.move.send</field>
-        <field name="inherit_id" ref="account.account_move_send_form"/>
-        <field name="arch" type="xml">
-
-            <!-- Warning banner -->
-            <xpath expr="//div[@name='warnings']" position="inside">
-                <field name="enable_tca" invisible="1"/>
-                <div class="alert alert-warning" role="alert"
-                     invisible="not checkbox_send_tca or not tca_warning">
-                    <field name="tca_warning"/>
-                </div>
-            </xpath>
-
-            <!-- Hide the generic UBL/CII partner warning when TCA is active
-                 (our tca_warning is more specific and replaces it) -->
-            <xpath expr="//div[@name='warnings']/div[contains(@invisible, 'ubl_partner_warning')]" position="attributes">
-                <attribute name="invisible">checkbox_send_tca or not checkbox_ubl_cii_xml or not ubl_partner_warning</attribute>
-            </xpath>
-            <xpath expr="//div[@name='warnings']/div[contains(@invisible, 'show_ubl_company_warning')]" position="attributes">
-                <attribute name="invisible">checkbox_send_tca or not checkbox_ubl_cii_xml or not show_ubl_company_warning</attribute>
-            </xpath>
-
-            <!-- TCA option after "Send by email" -->
-            <xpath expr="//div[@name='option_send_mail']" position="after">
-                <div name="option_tca" invisible="not enable_tca">
-                    <field name="checkbox_send_tca" nolabel="1"
-                           style="display: inline-block"/>
-                    <b>
-                        <label for="checkbox_send_tca"
-                               string="Submit via TCA Peppol (UAE)"/>
-                    </b>
-                </div>
-            </xpath>
-
-            <!-- Hide the "PINT AE (UAE Peppol)" XML checkbox when TCA send is ticked -->
-            <xpath expr="//div[@name='option_xml']" position="attributes">
-                <attribute name="invisible">checkbox_send_tca</attribute>
-            </xpath>
-
-        </field>
-    </record>
 
     <!-- ══════════════════════════════════════════════════════════════════════
          REJECT WIZARD FORM

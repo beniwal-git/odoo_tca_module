@@ -3,7 +3,7 @@
 
 {
     'name': 'TCA Peppol E-Invoicing (UAE PINT AE)',
-    'version': '17.0.2.1.0',
+    'version': '19.0.1.0.0',
     'category': 'Accounting/Accounting',
     'summary': 'UAE PINT AE e-invoicing via TCA Access Point',
     'description': """
@@ -17,7 +17,7 @@
         - OAuth2 client credentials authentication per company
         - Real-time delivery status tracking
         - Multi-company support
-        - Odoo 17 + 18 compatible
+        - Odoo 19 compatible
     """,
     'author': 'TCA - The Connect Arabia',
     'website': 'https://taxcomplianceagent.com/',
@@ -43,11 +43,11 @@
     'conflicts': ['account_peppol'],
     'data': [
         'security/ir.model.access.csv',
-        'data/pint_ae_templates.xml',
         'data/cron.xml',
         'views/res_config_settings_views.xml',
         'views/account_move_views.xml',
         'views/res_partner_views.xml',
+        'views/res_company_views.xml',
         'views/account_tax_views.xml',
     ],
     'license': 'OPL-1',

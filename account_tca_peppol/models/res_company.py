@@ -48,13 +48,38 @@ class ResCompany(models.Model):
         default=False,
         help='When enabled, invoices with a PINT AE partner can be sent via TCA Peppol.',
     )
-    invoice_is_tca = fields.Boolean(
-        string='Submit via TCA Peppol by default',
-        default=False,
-        help=(
-            'When enabled, the "Submit via TCA Peppol" checkbox will be pre-selected '
-            'by default when sending invoices to PINT AE (UAE) partners.'
-        ),
+    # ── PINT AE company identity — related to the company partner ─────────────
+    # The PINT AE identity fields live on res.partner; these writable related
+    # fields surface them on the company form's "Invoicing" tab so a company
+    # can be configured for e-invoicing without opening it in Contacts.
+
+    peppol_eas = fields.Selection(
+        related='partner_id.peppol_eas', readonly=False,
+        string='Peppol EAS',
+    )
+    peppol_endpoint = fields.Char(
+        related='partner_id.peppol_endpoint', readonly=False,
+        string='Peppol Endpoint',
+    )
+    tca_emirate = fields.Selection(
+        related='partner_id.tca_emirate', readonly=False,
+        string='Emirate',
+    )
+    tca_legal_id_type = fields.Selection(
+        related='partner_id.tca_legal_id_type', readonly=False,
+        string='Legal ID Type',
+    )
+    tca_trade_license = fields.Char(
+        related='partner_id.tca_trade_license', readonly=False,
+        string='Trade License / Registration ID',
+    )
+    tca_legal_authority = fields.Char(
+        related='partner_id.tca_legal_authority', readonly=False,
+        string='Issuing Authority',
+    )
+    tca_passport_country_id = fields.Many2one(
+        related='partner_id.tca_passport_country_id', readonly=False,
+        string='Passport Issuing Country',
     )
 
     # ── Computed helpers ──────────────────────────────────────────────────────

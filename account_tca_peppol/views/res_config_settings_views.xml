@@ -14,7 +14,7 @@
                     <setting string="Get Started with TCA"
                              help="Register with TCA to get your API credentials. TCA will guide you through EMARA registration to authorize TCA as your Accredited Service Provider (ASP).">
                         <div class="content-group">
-                            <div class="alert alert-info mt8 mb0">
+                            <div class="alert alert-info mt8 mb0" role="status">
                                 <strong>Setup Steps:</strong>
                                 <ol class="mb-0 mt-1">
                                     <li>Register at the <a href="https://portal-dev.taxcomplianceagent.com/login?redirectTo=%2F" target="_blank" class="alert-link">TCA Portal ↗</a> — TCA will redirect you to EMARA to register TCA as your ASP</li>
@@ -72,16 +72,6 @@
                                     <i class="fa fa-check-circle"/> <field name="tca_org_name" readonly="1"/>
                                 </span>
                             </div>
-                        </div>
-                    </setting>
-
-                    <!-- ── Step 3: Default sending options ─────────────────── -->
-                    <setting string="Default Sending Options"
-                             invisible="not tca_is_active"
-                             help="When enabled, the 'Submit via TCA Peppol' checkbox is pre-selected by default in the Send &amp; Print dialog for UAE partners.">
-                        <div>
-                            <field name="invoice_is_tca"/>
-                            <label for="invoice_is_tca"/>
                         </div>
                     </setting>
 

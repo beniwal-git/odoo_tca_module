@@ -21,7 +21,7 @@ UAE_EMIRATES = ['AUH', 'DXB', 'SHJ', 'UAQ', 'FUJ', 'AJM', 'RAK']
 class ResPartner(models.Model):
     """
     Extends res.partner to:
-    1. Add 'ubl_pint_ae' to the ubl_cii_format selection field
+    1. Add 'ubl_pint_ae' to the invoice_edi_format selection field
     2. Register AE → ubl_pint_ae in the country format mapping
     3. Add UAE-specific Peppol fields (legal entity type, trade license authority)
     """
@@ -82,11 +82,12 @@ class ResPartner(models.Model):
         ),
     )
 
-    # ── ubl_cii_format: add ubl_pint_ae to the selection ─────────────────────
-    # We extend the selection defined in account_edi_ubl_cii.
-    # Odoo 17 allows adding selection items via _inherit + selection_add.
+    # ── invoice_edi_format: add ubl_pint_ae to the selection ─────────────────
+    # Odoo 19: the partner's EDI-format field is `invoice_edi_format`
+    # (renamed from `ubl_cii_format`, which existed up to Odoo 17). We extend
+    # its selection here via _inherit + selection_add.
 
-    ubl_cii_format = fields.Selection(
+    invoice_edi_format = fields.Selection(
         selection_add=[('ubl_pint_ae', 'PINT AE (UAE Peppol)')],
         ondelete={'ubl_pint_ae': 'set null'},
     )
@@ -94,26 +95,53 @@ class ResPartner(models.Model):
     # ── Country → format mapping ──────────────────────────────────────────────
 
     @api.model
-    def _get_ubl_cii_formats(self):
+    def _get_ubl_cii_formats_info(self):
         """
         EXTENDS account_edi_ubl_cii.
-        Add UAE → PINT AE to the country-format mapping so that partners
-        with country AE auto-select the PINT AE format.
+        Register the PINT AE format so UAE (AE) partners auto-select it and it
+        is recognised as a Peppol format.
+
+        Odoo 19: the country→format mapping is derived from this info dict
+        (see res.partner._get_ubl_cii_formats_by_country) — the old
+        `_get_ubl_cii_formats` dict-mutation hook no longer applies.
         """
-        fmt = super()._get_ubl_cii_formats()
-        fmt['AE'] = 'ubl_pint_ae'
-        return fmt
+        formats_info = super()._get_ubl_cii_formats_info()
+        formats_info['ubl_pint_ae'] = {
+            'countries': ['AE'],
+            'on_peppol': True,
+            'sequence': 200,
+        }
+        return formats_info
+
+    # ── invoice_edi_format auto-suggestion ────────────────────────────────────
+    # Odoo 19's `invoice_edi_format` field computes from
+    # `_get_suggested_invoice_edi_format` — a base `account` hook that returns
+    # False; `account_edi_ubl_cii` never overrides it (its country-mapping logic
+    # is in the differently-named `_get_suggested_ubl_cii_edi_format`, used only
+    # by the export path). Without an override here `invoice_edi_format` stays
+    # empty for every UAE partner, so the TCA send-eligibility check and the
+    # `_post()` compliance gate — both keyed on `invoice_edi_format ==
+    # 'ubl_pint_ae'` — never fire. Suggest PINT AE for any AE-country partner,
+    # matching how l10n_it_edi / l10n_pl_edi override this same hook.
+
+    def _get_suggested_invoice_edi_format(self):
+        # OVERRIDE account — auto-select PINT AE for UAE partners.
+        res = super()._get_suggested_invoice_edi_format()
+        if not res and self.commercial_partner_id._deduce_country_code() == 'AE':
+            return 'ubl_pint_ae'
+        return res
 
     # ── EDI builder dispatch ──────────────────────────────────────────────────
 
-    def _get_edi_builder(self):
+    @api.model
+    def _get_edi_builder(self, invoice_edi_format):
         """
         EXTENDS account_edi_ubl_cii.
-        Route ubl_pint_ae format to the PINT AE builder model.
+        Route the ubl_pint_ae format to the PINT AE builder model.
         """
-        if self.ubl_cii_format == 'ubl_pint_ae':
+        if invoice_edi_format == 'ubl_pint_ae':
             return self.env['account.edi.xml.ubl_pint_ae']
-        return super()._get_edi_builder()
+        return super()._get_edi_builder(invoice_edi_format)
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -207,102 +235,57 @@ class ResPartner(models.Model):
             super(ResPartner, to_fill)._compute_peppol_endpoint()
 
     # ──────────────────────────────────────────────────────────────────────────
-    # CONSOLIDATED UAE PARTNER VALIDATION — runs on save (create/write).
-    # Fires only for UAE business partners (country=AE, is_company=True).
-    # Collects ALL field issues into a single ValidationError so the user
-    # sees every fix needed in one dialog instead of one-error-at-a-time.
+    # UAE PARTNER FORMAT VALIDATION — runs on save (create/write).
+    #
+    # FORMAT only: validates the *shape* of fields the user has filled. It
+    # never requires a field to be present. PINT AE *completeness* (every
+    # mandatory field set) is enforced where it actually matters — at invoice
+    # send time, by the XML builder's `_export_invoice_constraints`.
+    #
+    # A save-blocking completeness `@api.constrains` was wrong on two counts:
+    #   1. It prevented progressive configuration — you couldn't save a
+    #      half-filled company.
+    #   2. It mis-fired during `res.company.create`: the company's
+    #      Invoicing-tab fields are *related* fields that propagate to the
+    #      company partner only AFTER this constraint has already run, so the
+    #      constraint saw them empty and raised even when the user had filled
+    #      them. (That is the "still required after I filled it" bug.)
     # ──────────────────────────────────────────────────────────────────────────
 
-    @api.constrains(
-        'name', 'is_company', 'country_id',
-        'street', 'city',
-        'vat',
-        'peppol_eas', 'peppol_endpoint',
-        'email', 'phone', 'mobile',
-        'tca_emirate', 'tca_legal_id_type', 'tca_trade_license',
-        'tca_legal_authority', 'tca_passport_country_id',
-    )
-    def _check_tca_partner_complete(self):
+    @api.constrains('is_company', 'country_id', 'vat', 'email', 'phone')
+    def _check_tca_partner_formats(self):
         """
-        Enforce UAE PINT AE mandatory fields + format rules on UAE business
-        partners. Returns a single dialog listing every issue.
+        Format validation for UAE business partners — runs on save.
 
-        Scope: UAE company partners that the user has started configuring
-        for PINT AE — i.e. peppol_eas is '0235' OR at least one tca_* field
-        is set. Auto-created partners (e.g. the partner Odoo creates inside
-        `res.company.create`) carry none of these markers, so the check is
-        skipped and company creation isn't blocked. Once the user opens
-        the partner and fills any PINT AE field, the full set becomes
-        mandatory on the next save.
+        Scope: UAE company partners, and only when TCA e-invoicing is in use
+        (a company's own partner gates on its `tca_is_active`; any other
+        partner on whether any company has TCA active). TCA never activated →
+        skipped entirely.
+
+        Checks only the FORMAT of filled fields (TRN pattern, email, phone).
+        An empty field always passes — so this never blocks creating or
+        progressively configuring a company. Completeness is a send-time
+        concern, handled by
+        `account.edi.xml.ubl_pint_ae._export_invoice_constraints`.
         """
+        Company = self.env['res.company'].sudo()
+        any_tca_company = bool(Company.search_count([('tca_is_active', '=', True)]))
         for partner in self:
             if not partner.is_company:
                 continue
             if not (partner.country_id and partner.country_id.code == 'AE'):
                 continue
-            # Skip until the user has explicitly opted into PINT AE
-            # configuration on this partner.
-            opted_in = (
-                partner.peppol_eas == '0235'
-                or partner.tca_emirate
-                or partner.tca_legal_id_type
-                or partner.tca_trade_license
-                or partner.tca_legal_authority
-                or partner.tca_passport_country_id
-                or partner.tca_legal_form
-            )
-            if not opted_in:
+            own_company = Company.search([('partner_id', '=', partner.id)], limit=1)
+            if own_company:
+                if not own_company.tca_is_active:
+                    continue
+            elif not any_tca_company:
                 continue
 
             errors = []
 
-            # ── Mandatory fields ─────────────────────────────────────────────
-            if not partner.street:
-                errors.append(_('"Street" (IBT-035/050) is required.'))
-            if not partner.city:
-                errors.append(_('"City" (IBT-037/052) is required.'))
-            if not partner.vat:
-                errors.append(_('"Tax ID" / TRN (IBT-031/048) is required.'))
-            if not partner.peppol_eas:
-                errors.append(_(
-                    '"Peppol EAS" is required. Set it to 0235 in the "E-Invoicing" tab.'
-                ))
-            if not partner.peppol_endpoint:
-                errors.append(_(
-                    '"Peppol Endpoint" (IBT-034/049) is required.'
-                ))
-            if not partner.tca_emirate:
-                errors.append(_(
-                    '"Emirate" (ibr-128-ae) is required. '
-                    'Select AUH / DXB / SHJ / UAQ / FUJ / AJM / RAK.'
-                ))
-            if not partner.tca_legal_id_type:
-                errors.append(_(
-                    '"Legal ID Type" (BTAE-15/16) is required. '
-                    'Set TL / EID / PAS / CD.'
-                ))
-            if not partner.tca_trade_license:
-                errors.append(_(
-                    '"Trade License / Registration ID" (IBT-030/047) is required.'
-                ))
-
-            # ── Conditional fields based on Legal ID Type ────────────────────
-            if partner.tca_legal_id_type == 'TL' and not partner.tca_legal_authority:
-                errors.append(_(
-                    '"Issuing Authority" (BTAE-11/12) is required when '
-                    'Legal ID Type is Trade License.'
-                ))
-            if partner.tca_legal_id_type == 'PAS' and not partner.tca_passport_country_id:
-                errors.append(_(
-                    '"Passport Issuing Country" (BTAE-18/19) is required when '
-                    'Legal ID Type is Passport.'
-                ))
-
-            # ── Format checks ────────────────────────────────────────────────
-            # Accept either:
-            #   - 15-char TRN (UAE VAT registration), or
-            #   - 10-digit TIN (= first 10 digits of the TRN, per FTA).
-            # The XML builder derives the 10-digit TIN for IBT-032 emission.
+            # ── Tax ID (TRN) format ──────────────────────────────────────────
+            # Accept the 15-char UAE TRN or the 10-digit TIN, both starting '1'.
             if partner.vat:
                 v = partner.vat.strip()
                 if not (self._RE_UAE_TRN.match(v) or self._RE_UAE_TIN.match(v)):
@@ -311,39 +294,27 @@ class ResPartner(models.Model):
                         '10-digit TIN, both starting with "1". Current: "%s".', v
                     ))
 
-            # Peppol endpoint format (uses existing helper which respects placeholder)
-            if partner.peppol_eas and partner.peppol_endpoint:
-                ep_err = self._build_error_peppol_endpoint(
-                    partner.peppol_eas, partner.peppol_endpoint
-                )
-                if ep_err:
-                    errors.append(ep_err)
-
-            # Email format (Odoo doesn't enforce by default)
+            # ── Email format ─────────────────────────────────────────────────
             if partner.email and not self._RE_EMAIL.match(partner.email.strip()):
                 errors.append(_(
                     '"Email" must be a valid email address (e.g. name@example.com). '
                     'Current: "%s".', partner.email
                 ))
 
-            # Phone format — at least 7 digits, only digits + common separators
-            for phone_field_name, phone_label in [('phone', 'Phone'), ('mobile', 'Mobile')]:
-                phone_val = (partner[phone_field_name] or '').strip()
-                if not phone_val:
-                    continue
+            # ── Phone format ─────────────────────────────────────────────────
+            phone_val = (partner.phone or '').strip()
+            if phone_val:
                 if not self._RE_PHONE.match(phone_val):
                     errors.append(_(
-                        '"%s" may only contain digits, spaces, dashes, parentheses, '
-                        'dots and a leading +. Current: "%s".',
-                        phone_label, phone_val
+                        '"Phone" may only contain digits, spaces, dashes, '
+                        'parentheses, dots and a leading +. Current: "%s".',
+                        phone_val
                     ))
-                else:
-                    digit_count = sum(c.isdigit() for c in phone_val)
-                    if digit_count < 7:
-                        errors.append(_(
-                            '"%s" must contain at least 7 digits. Current: "%s".',
-                            phone_label, phone_val
-                        ))
+                elif sum(c.isdigit() for c in phone_val) < 7:
+                    errors.append(_(
+                        '"Phone" must contain at least 7 digits. Current: "%s".',
+                        phone_val
+                    ))
 
             if errors:
                 raise ValidationError(_(

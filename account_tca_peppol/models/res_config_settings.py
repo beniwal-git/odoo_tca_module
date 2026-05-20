@@ -43,12 +43,6 @@ class ResConfigSettings(models.TransientModel):
         related='company_id.tca_org_name',
         readonly=True,
     )
-    invoice_is_tca = fields.Boolean(
-        string='Submit via TCA Peppol by default',
-        related='company_id.invoice_is_tca',
-        readonly=False,
-    )
-
     def action_tca_test_connection(self):
         return self.company_id.action_tca_test_connection()
 

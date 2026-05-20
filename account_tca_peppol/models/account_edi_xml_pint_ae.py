@@ -32,10 +32,12 @@ UAE-specific additions over PEPPOL BIS3:
   IBT-200  Tax included indicator                  (TaxTotal/TaxIncludedIndicator = false)
 """
 
+import copy
 import logging
 import uuid as _uuid_mod
 
 from odoo import models, fields, api, _
+from odoo.addons.account_edi_ubl_cii.models.account_edi_common import FloatFmt
 
 _logger = logging.getLogger(__name__)
 
@@ -59,22 +61,6 @@ UAE_VAT_CATEGORIES = {
 }
 
 
-class AccountEdiXmlUBL21Extended(models.AbstractModel):
-    """
-    Extends the base UBL 2.1 builder so that any caller looking up
-    `_get_customization_ids()` on `account.edi.xml.ubl_21` (e.g. account_peppol's
-    endpoint validator) sees the `ubl_pint_ae` key. Without this, a KeyError
-    fires when account_peppol checks an AE partner endpoint.
-    """
-    _inherit = 'account.edi.xml.ubl_21'
-
-    @api.model
-    def _get_customization_ids(self):
-        ids = super()._get_customization_ids()
-        ids['ubl_pint_ae'] = PINT_AE_CUSTOMIZATION_ID
-        return ids
-
-
 class AccountEdiXmlUBLPintAe(models.AbstractModel):
     """
     PINT AE XML builder — inherits the full UBL BIS3 pipeline and
@@ -95,14 +81,120 @@ class AccountEdiXmlUBLPintAe(models.AbstractModel):
         return {}  # TCA runs its own schematron; no ecosio integration needed
 
     # ──────────────────────────────────────────────────────────────────────────
+    # DOCUMENT TEMPLATE — extend the UBL 2.1 templates with PINT AE nodes
+    # ──────────────────────────────────────────────────────────────────────────
+    # dict_to_xml strictly validates the rendered node tree against the
+    # document template: a child tag absent from the template raises
+    # ValueError. PINT AE emits UBL elements that Odoo's stock templates omit,
+    # so we extend a deep copy of the template with those nodes — placed in
+    # UBL 2.1 schema order, since template key order drives XML element order.
+
+    @staticmethod
+    def _tca_tmpl_insert_after(node, after_key, new_key, new_val):
+        """Return a copy of dict `node` with `new_key` inserted right after
+        `after_key` (appended if `after_key` is absent / `new_key` present)."""
+        if new_key in node:
+            return node
+        rebuilt = {}
+        for key, value in node.items():
+            rebuilt[key] = value
+            if key == after_key:
+                rebuilt[new_key] = new_val
+        if new_key not in rebuilt:
+            rebuilt[new_key] = new_val
+        return rebuilt
+
+    def _get_document_template(self, vals):
+        # OVERRIDE account.edi.xml.ubl_20 — see section note above.
+        template = copy.deepcopy(super()._get_document_template(vals))
+        line_key = ('cac:CreditNoteLine' if vals['document_type'] == 'credit_note'
+                    else 'cac:InvoiceLine')
+
+        # Root: BTAE-21 StatementDocumentReference (after DespatchDocumentReference).
+        template = self._tca_tmpl_insert_after(
+            template, 'cac:DespatchDocumentReference',
+            'cac:StatementDocumentReference',
+            copy.deepcopy(template.get('cac:DespatchDocumentReference') or {'cbc:ID': {}}),
+        )
+
+        # Party legal entity: IBT-033 CompanyLegalForm (after CompanyID).
+        for party_key in ('cac:AccountingSupplierParty',
+                          'cac:AccountingCustomerParty',
+                          'cac:SellerSupplierParty'):
+            party = (template.get(party_key) or {}).get('cac:Party')
+            if party and 'cac:PartyLegalEntity' in party:
+                party['cac:PartyLegalEntity'] = self._tca_tmpl_insert_after(
+                    party['cac:PartyLegalEntity'],
+                    'cbc:CompanyID', 'cbc:CompanyLegalForm', {})
+
+        # Invoice / credit-note line.
+        line_tmpl = template.get(line_key) or {}
+        item_tmpl = line_tmpl.get('cac:Item')
+        if item_tmpl is not None:
+            # BTAE-09/13: CommodityClassification NatureCode + CommodityCode.
+            item_tmpl['cac:CommodityClassification'] = {
+                'cbc:NatureCode': {},
+                'cbc:CommodityCode': {},
+                'cbc:ItemClassificationCode': {},
+            }
+            # BTAE-24: ItemInstance / LotIdentification.
+            item_tmpl['cac:ItemInstance'] = {
+                'cac:LotIdentification': {'cbc:LotNumberID': {}},
+            }
+        # BTAE-08: ItemPriceExtension carries a per-line TaxTotal.
+        if 'cac:ItemPriceExtension' in line_tmpl:
+            line_tmpl['cac:ItemPriceExtension'] = {
+                'cbc:Amount': {},
+                'cac:TaxTotal': {'cbc:TaxAmount': {}},
+            }
+
+        # IBT-200: TaxIncludedIndicator on the document TaxTotal.
+        if 'cac:TaxTotal' in template:
+            template['cac:TaxTotal'] = self._tca_tmpl_insert_after(
+                template['cac:TaxTotal'], 'cbc:RoundingAmount',
+                'cbc:TaxIncludedIndicator', {})
+
+        # BTAE-22: DeliveryTerms on cac:Delivery.
+        if 'cac:Delivery' in template:
+            template['cac:Delivery'] = self._tca_tmpl_insert_after(
+                template['cac:Delivery'], 'cac:DeliveryParty',
+                'cac:DeliveryTerms', {'cbc:ID': {}})
+        return template
+
+    # ──────────────────────────────────────────────────────────────────────────
     # CUSTOMIZATION / PROFILE IDs
     # ──────────────────────────────────────────────────────────────────────────
 
-    @api.model
-    def _get_customization_ids(self):
-        ids = super()._get_customization_ids()
-        ids['ubl_pint_ae'] = PINT_AE_CUSTOMIZATION_ID
-        return ids
+    def _get_customization_id(self, process_type='billing'):
+        # OVERRIDE account.edi.xml.ubl_bis3 — return the PINT AE CIUS identifier
+        # (UAE annex) instead of the EN16931 / Peppol-BIS3 one. Used both for
+        # the CustomizationID node and by account_peppol's endpoint validator
+        # (account_peppol/models/res_partner.py).
+        if process_type == 'selfbilling':
+            return PINT_AE_SELFBILLING_CUSTOMIZATION_ID
+        return PINT_AE_CUSTOMIZATION_ID
+
+    def _tca_process_type(self, invoice):
+        """'selfbilling' or 'billing' for this invoice — driven by the TCA
+        self-billing flag, not Odoo's journal-level ``is_self_billing``."""
+        return 'selfbilling' if invoice.tca_is_self_billing else 'billing'
+
+    def _ubl_add_customization_id_node(self, vals):
+        # EXTENDS account.edi.xml.ubl_bis3 — swap in the PINT AE CustomizationID.
+        super()._ubl_add_customization_id_node(vals)
+        process_type = self._tca_process_type(vals['invoice'])
+        vals['document_node']['cbc:CustomizationID']['_text'] = \
+            self._get_customization_id(process_type)
+
+    def _ubl_add_profile_id_node(self, vals):
+        # EXTENDS account.edi.xml.ubl_bis3 — PINT AE uses urn:peppol:bis:billing
+        # (or :selfbilling), not the BIS3 poacc profile id.
+        super()._ubl_add_profile_id_node(vals)
+        process_type = self._tca_process_type(vals['invoice'])
+        vals['document_node']['cbc:ProfileID']['_text'] = (
+            PINT_AE_SELFBILLING_PROFILE_ID if process_type == 'selfbilling'
+            else PINT_AE_PROFILE_ID
+        )
 
     # ──────────────────────────────────────────────────────────────────────────
     # BTAE-02: ProfileExecutionID
@@ -146,680 +238,523 @@ class AccountEdiXmlUBLPintAe(models.AbstractModel):
         return flags
 
     # ──────────────────────────────────────────────────────────────────────────
+    # HEADER NODES — BTAE-02/03/04/05/06/07, IBT-003/007/010/011/019/168, IBG-03
+    # ──────────────────────────────────────────────────────────────────────────
+
+    def _add_invoice_header_nodes(self, document_node, vals):
+        # EXTENDS account.edi.xml.ubl_bis3 — inject UAE root-level fields.
+        # dict_to_xml orders nodes via the UBL 2.1 Invoice/CreditNote templates,
+        # so we only set values here (except StatementDocumentReference — see
+        # below).
+        super()._add_invoice_header_nodes(document_node, vals)
+        invoice = vals['invoice']
+
+        # BTAE-02: ProfileExecutionID — 8-flag transaction-type string.
+        document_node['cbc:ProfileExecutionID'] = {
+            '_text': self._get_profile_execution_id(invoice),
+        }
+
+        # BTAE-07: per-document UUID (UUID4).
+        document_node['cbc:UUID'] = {'_text': str(_uuid_mod.uuid4())}
+
+        # IBT-168: IssueTime.
+        if invoice.invoice_date:
+            document_node['cbc:IssueTime'] = {
+                '_text': fields.Datetime.now().strftime('%H:%M:%S'),
+            }
+
+        # IBT-007: TaxPointDate.
+        if invoice.tca_tax_point_date:
+            document_node['cbc:TaxPointDate'] = {'_text': invoice.tca_tax_point_date}
+
+        # IBT-019: buyer accounting reference.
+        if invoice.tca_buyer_accounting_ref:
+            document_node['cbc:AccountingCost'] = {
+                '_text': invoice.tca_buyer_accounting_ref,
+            }
+
+        # BTAE-03: credit-note reason (DiscrepancyResponse/ResponseCode).
+        if vals['document_type'] == 'credit_note' and invoice.tca_credit_note_reason:
+            document_node['cac:DiscrepancyResponse'] = {
+                'cbc:ResponseCode': {'_text': invoice.tca_credit_note_reason},
+            }
+
+        # BTAE-05: contract reference + value (ContractDocumentReference).
+        if invoice.tca_contract_reference or invoice.tca_contract_value:
+            document_node['cac:ContractDocumentReference'] = {
+                'cbc:ID': {'_text': invoice.tca_contract_reference or invoice.name},
+                'cbc:DocumentDescription': {
+                    '_text': invoice.tca_contract_value or None,
+                },
+            }
+
+        # IBT-011: project reference.
+        if invoice.tca_project_reference:
+            document_node['cac:ProjectReference'] = {
+                'cbc:ID': {'_text': invoice.tca_project_reference},
+            }
+
+        # BTAE-21: export declaration number (StatementDocumentReference).
+        # NOT a key in the UBL 2.1 Invoice template — dict_to_xml appends it
+        # after the templated keys. Flagged for live-test review (B2 risk R-B2-1).
+        if invoice.tca_export_declaration_number:
+            document_node['cac:StatementDocumentReference'] = {
+                'cbc:ID': {'_text': invoice.tca_export_declaration_number},
+            }
+
+    def _ubl_add_invoice_type_code_node(self, vals):
+        # EXTENDS account.edi.xml.ubl_bis3 — IBT-003: emit the UNCL1001 code
+        # from tca_uncl1001_code (380 standard / 480 out-of-scope).
+        super()._ubl_add_invoice_type_code_node(vals)
+        if vals['document_type'] != 'invoice':
+            return
+        code = vals['invoice'].tca_uncl1001_code or '380'
+        vals['document_node']['cbc:InvoiceTypeCode']['_text'] = (
+            int(code) if code.isdigit() else code
+        )
+
+    def _ubl_add_credit_note_type_code_node(self, vals):
+        # EXTENDS account.edi.xml.ubl_bis3 — IBT-003: 381 standard / 81 OOS.
+        super()._ubl_add_credit_note_type_code_node(vals)
+        if vals['document_type'] != 'credit_note':
+            return
+        code = vals['invoice'].tca_uncl1001_code or '381'
+        vals['document_node']['cbc:CreditNoteTypeCode']['_text'] = (
+            int(code) if code.isdigit() else code
+        )
+
+    def _ubl_add_buyer_reference_node(self, vals):
+        # EXTENDS account.edi.xml.ubl_bis3 — IBT-010 from the TCA field.
+        super()._ubl_add_buyer_reference_node(vals)
+        invoice = vals.get('invoice')
+        if invoice and invoice.tca_buyer_reference:
+            vals['document_node']['cbc:BuyerReference']['_text'] = invoice.tca_buyer_reference
+
+    def _ubl_add_invoice_period_nodes(self, vals):
+        # EXTENDS account.edi.xml.ubl — BTAE-06 billing frequency +
+        # IBT-073/074 invoice-period dates.
+        super()._ubl_add_invoice_period_nodes(vals)
+        invoice = vals.get('invoice')
+        if not invoice:
+            return
+        period = {}
+        if invoice.tca_invoice_period_start:
+            period['cbc:StartDate'] = {'_text': invoice.tca_invoice_period_start}
+        if invoice.tca_invoice_period_end:
+            period['cbc:EndDate'] = {'_text': invoice.tca_invoice_period_end}
+        if invoice.tca_billing_frequency:
+            period['cbc:DescriptionCode'] = {'_text': invoice.tca_billing_frequency}
+        if period:
+            vals['document_node']['cac:InvoicePeriod'] = period
+
+    def _ubl_add_billing_reference_nodes(self, vals):
+        # EXTENDS account.edi.xml.ubl_bis3 — IBG-03: preceding invoice
+        # reference for credit notes, from the Odoo reversal link.
+        super()._ubl_add_billing_reference_nodes(vals)
+        invoice = vals.get('invoice')
+        if invoice and invoice.reversed_entry_id:
+            vals['document_node']['cac:BillingReference'].append({
+                'cac:InvoiceDocumentReference': {
+                    'cbc:ID': {'_text': invoice.reversed_entry_id.name},
+                    'cbc:IssueDate': {
+                        '_text': invoice.reversed_entry_id.invoice_date,
+                    },
+                },
+            })
+
+    def _add_invoice_exchange_rate_nodes(self, document_node, vals):
+        # OVERRIDE account.edi.xml.ubl_20 (no-op parent) — BTAE-04: when the
+        # invoice currency is not AED, emit TaxExchangeRate/CalculationRate
+        # (max 6 dp per ibr-002-ae).
+        super()._add_invoice_exchange_rate_nodes(document_node, vals)
+        invoice = vals['invoice']
+        aed = self.env.ref('base.AED', raise_if_not_found=False) or invoice.company_id.currency_id
+        if invoice.currency_id and invoice.currency_id != aed:
+            rate = self.env['res.currency']._get_conversion_rate(
+                invoice.currency_id, aed, invoice.company_id,
+                invoice.invoice_date or fields.Date.today(),
+            )
+            document_node['cac:TaxExchangeRate'] = {
+                'cbc:SourceCurrencyCode': {'_text': invoice.currency_id.name},
+                'cbc:TargetCurrencyCode': {'_text': aed.name},
+                'cbc:CalculationRate': {'_text': round(rate, 6)},
+            }
+
+    # ──────────────────────────────────────────────────────────────────────────
     # F2-2: VAT CATEGORY / EXEMPTION — UAE-specific overrides
     # ──────────────────────────────────────────────────────────────────────────
 
-    def _get_tax_unece_codes(self, invoice, tax):
-        """
-        EXTENDS account.edi.common.
-        If the tax has UAE-specific fields set (tca_tax_category, tca_exemption_reason_code,
-        tca_exemption_reason), use them instead of Odoo's EU-centric defaults.
+    def _get_tax_category_code(self, customer, supplier, tax):
+        # EXTENDS account.edi.common — prefer the UAE VAT category
+        # (S / Z / E / O / AE) set on the tax over Odoo's EU-centric default.
+        if tax and getattr(tax, 'tca_tax_category', False):
+            return tax.tca_tax_category
+        return super()._get_tax_category_code(customer, supplier, tax)
 
-        IBT-118: TaxCategory/ID          ← tca_tax_category
-        IBT-121: TaxExemptionReasonCode  ← tca_exemption_reason_code
-        IBT-120: TaxExemptionReason      ← tca_exemption_reason
-        """
-        result = super()._get_tax_unece_codes(invoice, tax)
-
-        if not tax:
-            return result
-
-        # Override category code if UAE category is explicitly set
-        if tax.tca_tax_category:
-            result['tax_category_code'] = tax.tca_tax_category
-
-        # Override exemption codes if UAE-specific values are provided
-        if tax.tca_exemption_reason_code:
-            result['tax_exemption_reason_code'] = tax.tca_exemption_reason_code
-        if tax.tca_exemption_reason:
-            result['tax_exemption_reason'] = tax.tca_exemption_reason
-
+    def _get_tax_exemption_reason(self, customer, supplier, tax):
+        # EXTENDS account.edi.common — IBT-120/121 from the UAE-specific
+        # exemption fields when present.
+        result = super()._get_tax_exemption_reason(customer, supplier, tax)
+        if tax:
+            if getattr(tax, 'tca_exemption_reason_code', False):
+                result['tax_exemption_reason_code'] = tax.tca_exemption_reason_code
+            if getattr(tax, 'tca_exemption_reason', False):
+                result['tax_exemption_reason'] = tax.tca_exemption_reason
         return result
+
+    def _ubl_default_tax_category_grouping_key(self, base_line, tax_data, vals, currency):
+        # EXTENDS account.edi.xml.ubl_bis3 — aligned-ibrp-o-05: an
+        # "Out of scope" (O) VAT category MUST NOT carry a rate (Percent).
+        key = super()._ubl_default_tax_category_grouping_key(base_line, tax_data, vals, currency)
+        if key and key.get('tax_category_code') == 'O':
+            key['percent'] = None
+        return key
+
+    def _ubl_get_tax_total_node(self, vals, tax_total):
+        # EXTENDS account.edi.xml.ubl — IBT-200: PINT AE B2B pricing is always
+        # VAT-exclusive, so the document TaxTotal carries TaxIncludedIndicator
+        # = false.
+        node = super()._ubl_get_tax_total_node(vals, tax_total)
+        node['cbc:TaxIncludedIndicator'] = {'_text': 'false'}
+        return node
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # DELIVERY, PAYMENT MEANS, SELLER SUPPLIER PARTY
+    # ──────────────────────────────────────────────────────────────────────────
+
+    def _add_invoice_delivery_nodes(self, document_node, vals):
+        # EXTENDS account.edi.xml.ubl_bis3 — IBT-072 ActualDeliveryDate,
+        # BTAE-22 DeliveryTerms (incoterms), BTAE-23 DeliveryParty TRN.
+        super()._add_invoice_delivery_nodes(document_node, vals)
+        invoice = vals['invoice']
+        delivery = document_node.get('cac:Delivery')
+        if not isinstance(delivery, dict):
+            return
+        if invoice.tca_delivery_date:
+            delivery['cbc:ActualDeliveryDate'] = {'_text': invoice.tca_delivery_date}
+        if invoice.tca_incoterms:
+            delivery['cac:DeliveryTerms'] = {
+                'cbc:ID': {'_text': invoice.tca_incoterms, 'schemeID': 'Incoterms'},
+            }
+        if invoice.tca_delivery_party_trn:
+            party = delivery.setdefault('cac:DeliveryParty', {})
+            ids = party.setdefault('cac:PartyIdentification', [])
+            if isinstance(ids, list):
+                ids.append({'cbc:ID': {'_text': invoice.tca_delivery_party_trn}})
+
+    def _add_invoice_payment_means_nodes(self, document_node, vals):
+        # EXTENDS account.edi.xml.ubl_bis3 — ibr-191-ae: a PINT AE credit note
+        # (type code 381/81/261) or a Deemed-Supply invoice MUST NOT carry a
+        # PaymentMeans element. Odoo 19's account.edi.xml.ubl_21._get_invoice_node
+        # adds PaymentMeans to credit notes too (UBL 2.1 permits it), so it must
+        # be actively suppressed here for both cases — an empty list renders no
+        # node.
+        invoice = vals['invoice']
+        flags = (invoice.tca_transaction_type_flags or '00000000').ljust(8, '0')
+        is_credit_note = invoice.move_type in ('out_refund', 'in_refund')
+        if is_credit_note or flags[1] == '1':
+            document_node['cac:PaymentMeans'] = []
+            return
+        super()._add_invoice_payment_means_nodes(document_node, vals)
+
+    def _add_invoice_seller_supplier_party_nodes(self, document_node, vals):
+        # EXTENDS account.edi.xml.ubl_20 — BTAE-14: disclosed-agent principal
+        # TRN as SellerSupplierParty/Party/PartyIdentification.
+        super()._add_invoice_seller_supplier_party_nodes(document_node, vals)
+        principal = vals['invoice'].tca_principal_id
+        if principal:
+            document_node['cac:SellerSupplierParty'] = {
+                'cac:Party': {
+                    'cac:PartyIdentification': [
+                        {'cbc:ID': {'_text': principal}},
+                    ],
+                },
+            }
 
     # ──────────────────────────────────────────────────────────────────────────
     # PARTY VALS — UAE-specific overrides
     # ──────────────────────────────────────────────────────────────────────────
 
-    def _get_partner_party_legal_entity_vals_list(self, partner):
-        """
-        EXTENDS account.edi.xml.ubl_bis3.
-        Adds UAE-specific schemeAgencyID (BTAE-15/16) and schemeAgencyName:
-          - BTAE-12/11: Issuing authority name when type = TL
-          - BTAE-18/19: Passport issuing country code when type = PAS
+    def _tca_is_buyer_party(self, vals, partner):
+        """True when `partner` is the invoice's customer (buyer) — used to
+        decide whether invoice-level buyer overrides apply to this party."""
+        invoice = vals.get('invoice')
+        return bool(invoice) and partner.commercial_partner_id == invoice.commercial_partner_id
 
-        For the buyer party, prefer invoice-level overrides (set via env context
-        by `_export_invoice_vals`) so users can fill values per invoice without
-        editing the partner record.
-        """
-        vals_list = super()._get_partner_party_legal_entity_vals_list(partner)
+    def _tca_resolve_legal_id(self, vals, partner):
+        """Resolve (trade_license, legal_id_type, legal_authority, passport_code)
+        for a party. Invoice-level buyer overrides win over the partner record;
+        the supplier always uses the partner record."""
+        commercial = partner.commercial_partner_id
+        invoice = vals.get('invoice')
+        is_buyer = self._tca_is_buyer_party(vals, partner)
 
-        ctx = self.env.context
-        is_buyer = ctx.get('tca_buyer_partner_id') == partner.id
-
-        # Resolve each value: invoice override (buyer only) → partner field
-        if is_buyer and ctx.get('tca_buyer_trade_license_override'):
-            trade_license = ctx['tca_buyer_trade_license_override']
+        if is_buyer and invoice.tca_buyer_trade_license:
+            trade_license = invoice.tca_buyer_trade_license
         else:
             trade_license = (
-                partner.tca_trade_license
-                or partner.company_registry
-                or partner.vat
-                or ''
+                commercial.tca_trade_license or commercial.company_registry
+                or commercial.vat or ''
             )
-
-        if is_buyer and ctx.get('tca_buyer_legal_id_type_override'):
-            legal_id_type = ctx['tca_buyer_legal_id_type_override']
+        if is_buyer and invoice.tca_buyer_legal_id_type:
+            legal_id_type = invoice.tca_buyer_legal_id_type
         else:
-            legal_id_type = partner.tca_legal_id_type
-
-        if is_buyer and ctx.get('tca_buyer_legal_authority_override'):
-            legal_authority = ctx['tca_buyer_legal_authority_override']
+            legal_id_type = commercial.tca_legal_id_type
+        if is_buyer and invoice.tca_buyer_legal_authority:
+            legal_authority = invoice.tca_buyer_legal_authority
         else:
-            legal_authority = partner.tca_legal_authority
-
-        if is_buyer and ctx.get('tca_buyer_passport_country_code_override'):
-            passport_country_code = ctx['tca_buyer_passport_country_code_override']
+            legal_authority = commercial.tca_legal_authority
+        if is_buyer and invoice.tca_buyer_passport_country_id:
+            passport_code = invoice.tca_buyer_passport_country_id.code
         else:
-            passport_country_code = (
-                partner.tca_passport_country_id.code
-                if partner.tca_passport_country_id else ''
+            passport_code = (
+                commercial.tca_passport_country_id.code
+                if commercial.tca_passport_country_id else ''
             )
+        return trade_license, legal_id_type, legal_authority, passport_code
 
-        for vals in vals_list:
-            if trade_license:
-                vals['company_id'] = trade_license
-                if legal_id_type:
-                    attrs = {'schemeAgencyID': legal_id_type}
-                    if legal_id_type == 'TL' and legal_authority:
-                        # BTAE-12/11: trade license issuing authority
-                        attrs['schemeAgencyName'] = legal_authority
-                    elif legal_id_type == 'PAS' and passport_country_code:
-                        # BTAE-18/19: passport issuing country code
-                        attrs['schemeAgencyName'] = passport_country_code
-                    vals['company_id_attrs'] = attrs
-            # IBT-033: CompanyLegalForm (still partner-level only)
-            if partner.tca_legal_form:
-                vals['company_legal_form'] = partner.tca_legal_form
-
-        return vals_list
-
-    def _get_partner_party_tax_scheme_vals_list(self, partner, role):
-        """
-        EXTENDS account.edi.xml.ubl_bis3.
-        For UAE partners (peppol_eas='0235'), emit exactly ONE PartyTaxScheme
-        entry with CompanyID = 10-digit TIN and TaxScheme/ID = 'VAT'.
-
-        Schematron rules at play:
-          - ibr-148-ae (line 2356, PINT-jurisdiction-aligned-rules.xslt):
-            Supplier PartyTaxScheme/CompanyID must match ^1[0-9]{9}$.
-          - ibr-133-ae (line 2379): every TaxScheme/ID in the document must
-            be 'VAT' whenever the supplier emits PartyTaxScheme/CompanyID.
-          - ibr-134-ae: rejects parent UBL's NOT_EU_VAT fallback for UAE
-            (partner.vat starts with a digit); requires 'VAT'.
-          - ibr-104 / ibr-179-ae: count(PartyTaxScheme/CompanyID) <= 1.
-
-        Out-of-Scope (480 / 81) is NOT signaled by '!VAT' on PartyTaxScheme.
-        The OOS classification lives in InvoiceTypeCode + line/document
-        ClassifiedTaxCategory.ID='O' (with Percent stripped). The supplier's
-        TaxScheme/ID stays 'VAT' on OOS docs to satisfy ibr-133-ae.
-
-        Source of TIN: `vat` preferred, fallback to `peppol_endpoint` (which
-        happens to share the 10-digit format).
-        """
-        if partner.peppol_eas == UAE_EAS:
-            # PartyTaxScheme/CompanyID for an AE-country supplier carries the
-            # 15-char TRN. Schematron rules:
-            #   - ibr-132-ae (priority 1002, matches Party[country=AE]/.../
-            #     PartyTaxScheme/CompanyID): demands ^1[a-zA-Z0-9]{14}$.
-            #   - ibr-148-ae (priority 1001, matches AccountingSupplierParty/
-            #     Party/PartyTaxScheme/CompanyID): demands ^1[0-9]{9}$.
-            # XSLT priority resolves to ibr-132-ae for an AE supplier, so we
-            # MUST emit the full TRN, not the sliced TIN. (The 10-digit TIN
-            # rule is effectively for non-AE suppliers, which PINT AE
-            # doesn't really cover.)
-            trn = partner.vat or partner.peppol_endpoint or ''
-            if trn:
-                return [{
-                    'company_id': trn,
-                    'tax_scheme_vals': {'id': 'VAT'},
-                }]
-        # Non-UAE partner — defer to parent
-        return super()._get_partner_party_tax_scheme_vals_list(partner, role)
-
-    def _get_partner_address_vals(self, partner):
-        """
-        EXTENDS account.edi.xml.ubl_bis3.
-        UAE mandate (ibr-128-ae): when country = AE, CountrySubentity must be
-        one of AUH / DXB / SHJ / UAQ / FUJ / AJM / RAK.
-
-        For the buyer party, prefer the invoice-level `tca_buyer_emirate`
-        override (set via env context by `_export_invoice_vals`) so users can
-        fill it per invoice without editing the partner record.
-        """
-        vals = super()._get_partner_address_vals(partner)
+    def _ubl_get_partner_address_node(self, vals, partner):
+        # EXTENDS account.edi.xml.ubl_bis3 — ibr-128-ae: CountrySubentity must
+        # be a UAE emirate code (AUH/DXB/SHJ/UAQ/FUJ/AJM/RAK) for AE addresses.
+        node = super()._ubl_get_partner_address_node(vals, partner)
         if partner.country_id and partner.country_id.code == 'AE':
             emirate = ''
-            ctx = self.env.context
-            if ctx.get('tca_buyer_partner_id') == partner.id and ctx.get('tca_buyer_emirate_override'):
-                emirate = ctx['tca_buyer_emirate_override']
+            if self._tca_is_buyer_party(vals, partner):
+                emirate = vals['invoice'].tca_buyer_emirate or ''
             if not emirate:
-                emirate = partner.tca_emirate or ''
-            if not emirate and partner.state_id:
-                emirate = partner.state_id.code or ''
-            vals['country_subentity'] = emirate
-        return vals
+                emirate = partner.tca_emirate or (partner.state_id.code or '')
+            node['cbc:CountrySubentity'] = {'_text': emirate}
+        return node
 
-    # ──────────────────────────────────────────────────────────────────────────
-    # TAX TOTAL VALS — IBT-200 + BTAE-20 (AED total for foreign currency)
-    # ──────────────────────────────────────────────────────────────────────────
+    def _ubl_add_party_tax_scheme_nodes(self, vals):
+        # EXTENDS account.edi.xml.ubl_bis3 — for a UAE party emit exactly one
+        # PartyTaxScheme: CompanyID = full 15-char TRN, TaxScheme/ID = 'VAT'
+        # (ibr-132-ae / ibr-133-ae / ibr-179-ae). TRN from vat, else
+        # peppol_endpoint.
+        #
+        # Gate on country code (AE), NOT on peppol_eas == '0235' — Odoo 19
+        # auto-computes peppol_eas='0235' for every UAE partner, but a partner
+        # may have peppol_eas='0235' set on a non-AE record (legacy / data
+        # entry slip). Aligning with _ubl_add_party_legal_entity_nodes and
+        # _ubl_get_partner_address_node — single source of truth: country.
+        super()._ubl_add_party_tax_scheme_nodes(vals)
+        commercial = vals['party_vals']['partner'].commercial_partner_id
+        if commercial.country_id and commercial.country_id.code == 'AE':
+            trn = commercial.vat or commercial.peppol_endpoint or ''
+            if trn:
+                vals['party_node']['cac:PartyTaxScheme'] = [{
+                    'cbc:CompanyID': {'_text': trn},
+                    'cac:TaxScheme': {'cbc:ID': {'_text': 'VAT'}},
+                }]
 
-    def _get_invoice_tax_totals_vals_list(self, invoice, taxes_vals):
-        """
-        EXTENDS account.edi.xml.ubl_bis3.
-        1. IBT-200: Adds TaxIncludedIndicator = false (mandatory in PINT AE).
-        2. BTAE-20: When invoice currency != AED, adds a second minimal TaxTotal
-           in AED (accounting currency) containing only cbc:TaxAmount.
-        """
-        vals_list = super()._get_invoice_tax_totals_vals_list(invoice, taxes_vals)
+    def _ubl_add_party_legal_entity_nodes(self, vals):
+        # EXTENDS account.edi.xml.ubl_bis3 — UAE PartyLegalEntity: CompanyID =
+        # legal registration ID, with schemeAgencyID = legal-ID type
+        # (BTAE-15/16) and schemeAgencyName = issuing authority when TL
+        # (BTAE-11/12) / passport country when PAS (BTAE-18/19). IBT-033
+        # CompanyLegalForm.
+        super()._ubl_add_party_legal_entity_nodes(vals)
+        partner = vals['party_vals']['partner']
+        commercial = partner.commercial_partner_id
+        if not (commercial.country_id and commercial.country_id.code == 'AE'):
+            return
 
-        # BTAE-20 requires AED specifically, not just company currency
-        aed = self.env.ref('base.AED', raise_if_not_found=False) or invoice.company_id.currency_id
+        trade_license, legal_id_type, legal_authority, passport_code = \
+            self._tca_resolve_legal_id(vals, partner)
 
-        for vals in vals_list:
-            # IBT-200: UAE always VAT-exclusive pricing for B2B
-            vals['tax_included_indicator'] = 'false'
+        nodes = vals['party_node']['cac:PartyLegalEntity']
+        if nodes:
+            legal_node = nodes[-1]
+        else:
+            legal_node = {'cbc:RegistrationName': {'_text': commercial.name}}
+            nodes.append(legal_node)
 
-            # ibr-119-ae: each VAT breakdown (TaxSubtotal) shall have a
-            # VAT category rate UNLESS the invoice is "not subject to VAT".
-            # For OOS subtotals (category 'O'), drop Percent at both
-            # subtotal and TaxCategory levels.
-            for sub in vals.get('tax_subtotal_vals', []) or []:
-                cat = sub.get('tax_category_vals') or {}
-                if cat.get('id') == 'O':
-                    sub.pop('percent', None)
-                    cat.pop('percent', None)
+        if trade_license:
+            company_id = {'_text': trade_license}
+            if legal_id_type:
+                company_id['schemeAgencyID'] = legal_id_type
+                if legal_id_type == 'TL' and legal_authority:
+                    company_id['schemeAgencyName'] = legal_authority
+                elif legal_id_type == 'PAS' and passport_code:
+                    company_id['schemeAgencyName'] = passport_code
+            legal_node['cbc:CompanyID'] = company_id
 
-        # BTAE-20: second TaxTotal in AED when invoice is in foreign currency
-        if invoice.currency_id and invoice.currency_id != aed:
-            # Convert tax amount to AED
-            tax_amount_company = taxes_vals.get('tax_amount', 0.0)
-            # If company currency is already AED, use directly; otherwise convert
-            if invoice.company_id.currency_id == aed:
-                aed_tax_amount = round(tax_amount_company, 2)
-            else:
-                aed_tax_amount = round(invoice.company_id.currency_id._convert(
-                    tax_amount_company, aed, invoice.company_id,
-                    invoice.invoice_date or fields.Date.today(),
-                ), 2)
-            vals_list.append({
-                'currency': aed,
-                'currency_dp': 2,
-                'tax_amount': aed_tax_amount,
-                'btae_20_aed_total': True,
-            })
-
-        return vals_list
+        if commercial.tca_legal_form:
+            legal_node['cbc:CompanyLegalForm'] = {'_text': commercial.tca_legal_form}
 
     # ──────────────────────────────────────────────────────────────────────────
     # INVOICE LINE VALS — BTAE-08, BTAE-09, BTAE-10, BTAE-13, IBT-158
     # ──────────────────────────────────────────────────────────────────────────
 
-    def _get_invoice_line_item_vals(self, line, taxes_vals):
-        """
-        EXTENDS account.edi.xml.ubl_bis3.
-        Adds item identifiers (IBT-155/156/157), restores TaxExemptionReasonCode/Reason
-        at line level, and adds PerUnitAmount for margin/e-commerce.
-        """
-        vals = super()._get_invoice_line_item_vals(line, taxes_vals)
+    def _tca_line_record(self, vals):
+        """The account.move.line behind the current line node, or False."""
+        record = vals['line_vals']['base_line'].get('record')
+        if record and record._name == 'account.move.line':
+            return record
+        return False
 
-        # ── IBT-155: Seller item identifier ───────────────────────────────────
+    def _ubl_add_line_item_identification_nodes(self, vals):
+        # EXTENDS account.edi.xml.ubl — IBT-155/156/157 item identifiers from
+        # the TCA per-line fields (override the product-derived defaults).
+        super()._ubl_add_line_item_identification_nodes(vals)
+        line = self._tca_line_record(vals)
+        if not line:
+            return
+        item_node = vals['item_node']
         if line.tca_seller_item_id:
-            vals['sellers_item_identification_vals'] = {'id': line.tca_seller_item_id}
-
-        # ── IBT-156: Buyer item identifier ────────────────────────────────────
+            item_node['cac:SellersItemIdentification'] = {
+                'cbc:ID': {'_text': line.tca_seller_item_id},
+            }
         if line.tca_buyer_item_id:
-            vals['buyers_item_identification_vals'] = {'id': line.tca_buyer_item_id}
-
-        # ── IBT-157: Standard item identifier (GTIN etc.) ────────────────────
+            item_node['cac:BuyersItemIdentification'] = {
+                'cbc:ID': {'_text': line.tca_buyer_item_id},
+            }
         if line.tca_standard_item_id:
-            vals['standard_item_identification_vals'] = {
-                'id': line.tca_standard_item_id,
-                'id_attrs': {'schemeID': line.tca_standard_item_scheme or '0160'},
+            item_node['cac:StandardItemIdentification'] = {
+                'cbc:ID': {
+                    '_text': line.tca_standard_item_id,
+                    'schemeID': line.tca_standard_item_scheme or '0160',
+                },
             }
 
-        # BIS3 strips tax_exemption_reason_code/reason from ClassifiedTaxCategory.
-        # PINT AE needs them back for exempt (E) lines (ibr-167-ae).
-        # Also add PerUnitAmount for margin scheme (N) and e-commerce.
-        per_unit_amount = line.tca_per_unit_amount if hasattr(line, 'tca_per_unit_amount') else 0
-        currency = line.currency_id or line.company_currency_id
+    def _ubl_add_line_item_commodity_classification_nodes(self, vals):
+        # EXTENDS account.edi.xml.ubl — BTAE-13 CommodityCode (G/S/B),
+        # BTAE-09 NatureCode (reverse-charge description), IBT-158
+        # ItemClassificationCode (HS), BTAE-17 ItemClassificationCode (SAC).
+        super()._ubl_add_line_item_commodity_classification_nodes(vals)
+        line = self._tca_line_record(vals)
+        if not line:
+            return
+        nodes = vals['item_node']['cac:CommodityClassification']
+        primary = {'cbc:CommodityCode': {'_text': line.tca_effective_commodity_type}}
+        if line.tca_rc_description:
+            primary['cbc:NatureCode'] = {'_text': line.tca_rc_description}
+        nodes.append(primary)
+        if line.tca_hs_code:
+            nodes.append({
+                'cbc:ItemClassificationCode': {
+                    '_text': line.tca_hs_code,
+                    'listID': 'HS',
+                    'listVersionID': '1.0',
+                },
+            })
+        sac = getattr(line, 'tca_service_accounting_code', '') or ''
+        if sac:
+            nodes.append({
+                'cbc:ItemClassificationCode': {'_text': sac, 'listID': 'SAC'},
+            })
 
-        for ctc in vals.get('classified_tax_category_vals', []):
-            tax_category_code = ctc.get('id', '')
+    def _ubl_add_line_price_node(self, vals, in_foreign_currency=True):
+        # EXTENDS account.edi.xml.ubl — ibr-126-ae: Price/BaseQuantity is
+        # mandatory and a Price-level AllowanceCharge must carry the gross
+        # unit price (BaseAmount) and the per-unit discount (Amount).
+        #
+        # bis3 sets `cbc:PriceAmount` from `raw_gross_price_unit_currency` —
+        # which is the GROSS unit price (pre-discount). Earlier this override
+        # mis-read PriceAmount as the *net* and back-derived `gross = net /
+        # (1 − d/100)`, producing `gross / (1 − d/100)` (over-grossed) and a
+        # wrong Amount. With discount=0 the formula collapsed to identity, so
+        # the bug only fired on lines with a real discount.
+        #
+        # Read the gross from base_line directly and compute the per-unit
+        # discount as `gross × (discount/100)`.
+        super()._ubl_add_line_price_node(vals, in_foreign_currency=in_foreign_currency)
+        price_node = vals['line_node'].get('cac:Price')
+        if not price_node:
+            return
+        price_node['cbc:BaseQuantity'] = {'_text': 1}
 
-            # Restore exemption reason for E category from the line's actual taxes
-            if tax_category_code == 'E':
-                for tax in line.tax_ids:
-                    unece = self._get_tax_unece_codes(line.move_id, tax)
-                    if unece.get('tax_category_code') == 'E':
-                        if unece.get('tax_exemption_reason_code'):
-                            ctc['tax_exemption_reason_code'] = unece['tax_exemption_reason_code']
-                        if unece.get('tax_exemption_reason'):
-                            ctc['tax_exemption_reason'] = unece['tax_exemption_reason']
-                        break
-
-            # aligned-ibrp-o-05: line ClassifiedTaxCategory with ID='O'
-            # (Not subject to VAT) MUST NOT carry an Invoiced item VAT rate
-            # (IBT-152, the Percent). Drop the percent key so the parent
-            # template suppresses it.
-            if tax_category_code == 'O':
-                ctc.pop('percent', None)
-
-            # PerUnitAmount only for margin (N) and e-commerce lines that have it set
-            if per_unit_amount and tax_category_code in ('N', 'S'):
-                ctc['per_unit_amount'] = per_unit_amount
-                ctc['per_unit_amount_currency'] = currency
-
-        return vals
-
-    def _get_invoice_line_price_vals(self, line):
-        """
-        EXTENDS account.edi.xml.ubl_20.
-        ibr-126-ae: BaseQuantity and GrossPrice (AllowanceCharge/BaseAmount) are mandatory.
-        """
-        vals = super()._get_invoice_line_price_vals(line)
-        vals['base_quantity'] = 1
-        # AllowanceCharge inside Price: ChargeIndicator=false, Amount=discount, BaseAmount=gross
-        net = vals.get('price_amount', 0.0)
-        gross = net  # default when no discount
-        discount_amount = 0.0
-        if line.discount and line.discount != 100.0:
-            gross = net / (1.0 - line.discount / 100.0)
-            discount_amount = gross - net
-        vals['allowance_charge_vals'] = {
-            'charge_indicator': 'false',
-            'amount': round(discount_amount, 10),
-            'base_amount': round(gross, 10),
-            'currency': line.currency_id,
-            'currency_dp': self._get_currency_decimal_places(line.currency_id),
-        }
-        return vals
-
-    def _get_invoice_line_vals(self, line, line_id, taxes_vals):
-        """
-        EXTENDS account.edi.xml.ubl_bis3.
-        Adds UAE-specific per-line elements:
-          - BTAE-10: ItemPriceExtension/Amount (net line amount payable)
-          - BTAE-08: ItemPriceExtension/TaxTotal/TaxAmount (per-line VAT)
-          - BTAE-09: CommodityClassification/NatureCode (RC goods/services type code)
-          - BTAE-13: CommodityClassification/CommodityCode (G/S/B)
-          - IBT-158: CommodityClassification/ItemClassificationCode (HS code)
-          - BTAE-17: AdditionalItemIdentification with schemeID="SAC"
-          - BTAE-24: ItemInstance/LotIdentification/LotNumberID
-          - Line-level TaxTotal (restored from BIS3 removal)
-        """
-        vals = super()._get_invoice_line_vals(line, line_id, taxes_vals)
-
-        currency = line.currency_id or line.company_currency_id
-        dp = 2
-
-        # ── IBT-127: Line note ────────────────────────────────────────────────
-        if line.tca_line_note:
-            vals['note'] = line.tca_line_note
-
-        # ── IBT-133: Buyer accounting reference per line ──────────────────────
-        # (AccountingCost at line level — parent renders it from vals)
-
-        # ── IBT-132: Order line reference ─────────────────────────────────────
-        if line.tca_order_line_ref:
-            vals['order_line_ref'] = line.tca_order_line_ref
-
-        # ── IBG-26: Line invoice period ───────────────────────────────────────
-        if line.tca_line_period_start or line.tca_line_period_end:
-            vals['invoice_period_vals_list'] = [{
-                'start_date': line.tca_line_period_start,
-                'end_date': line.tca_line_period_end,
-            }]
-
-        # ── BTAE-10: net line amount ──────────────────────────────────────────
-        line_net_amount = vals.get('line_extension_amount', 0.0)
-
-        # ── BTAE-08: per-line VAT amount ──────────────────────────────────────
-        line_vat_amount = sum(
-            detail.get('tax_amount_currency', 0.0)
-            for detail in taxes_vals.get('tax_details', {}).values()
-        )
-
-        vals['item_price_extension_vals'] = {
-            'amount': round(line_net_amount + line_vat_amount, dp),
-            'currency': currency,
-            'currency_dp': dp,
-            'tax_total_vals': {
-                'tax_amount': round(line_vat_amount, dp),
-                'currency': currency,
-                'currency_dp': dp,
+        base_line = vals['line_vals']['base_line']
+        suffix = '_currency' if in_foreign_currency else ''
+        currency = base_line['currency_id'] if in_foreign_currency else vals['company_currency']
+        dp = currency.decimal_places
+        gross = base_line['tax_details'][f'raw_gross_price_unit{suffix}']
+        discount = base_line.get('discount') or 0.0
+        per_unit_discount = gross * (discount / 100.0)
+        price_node['cac:AllowanceCharge'] = {
+            'cbc:ChargeIndicator': {'_text': 'false'},
+            'cbc:Amount': {
+                '_text': FloatFmt(per_unit_discount, min_dp=dp),
+                'currencyID': currency.name,
+            },
+            'cbc:BaseAmount': {
+                '_text': FloatFmt(gross, min_dp=dp),
+                'currencyID': currency.name,
             },
         }
 
-        # ── Restore line-level TaxTotal (BIS3 removes it, PINT AE needs it) ──
-        vals['tax_total_vals'] = [{
-            'currency': currency,
-            'currency_dp': dp,
-            'tax_amount': round(line_vat_amount, dp),
-        }]
+    def _get_invoice_line_node(self, vals):
+        # EXTENDS account.edi.xml.ubl_20 — append UAE per-line nodes:
+        # BTAE-08 per-line VAT, BTAE-10 ItemPriceExtension, line-level
+        # TaxTotal, IBT-127 note, IBT-132 order line ref, IBG-26 line period,
+        # BTAE-24 lot number.
+        line_node = super()._get_invoice_line_node(vals)
+        line = self._tca_line_record(vals)
+        if not line:
+            return line_node
+        base_line = vals['line_vals']['base_line']
+        currency = base_line['currency_id']
+        dp = currency.decimal_places
 
-        # ── Commodity classification (BTAE-13 + IBT-158 + BTAE-09) ───────────
-        commodity_code = line.tca_effective_commodity_type
-        hs_code = line.tca_hs_code or ''
-        rc_description = line.tca_rc_description or ''
-
-        item_vals = vals.get('item_vals', {})
-        pint_classifications = [{'commodity_code': commodity_code}]
-
-        # BTAE-09: NatureCode for reverse charge (goes inside CommodityClassification)
-        if rc_description:
-            pint_classifications[0]['nature_code'] = rc_description
-
-        if hs_code:
-            # If we already have a classification entry with nature_code, add HS to same entry
-            if rc_description:
-                pint_classifications[0]['item_classification_code'] = hs_code
-                pint_classifications[0]['item_classification_code_attrs'] = {
-                    'listID': 'HS',
-                    'listVersionID': '1.0',
-                }
-            else:
-                pint_classifications.append({
-                    'item_classification_code': hs_code,
-                    'item_classification_code_attrs': {
-                        'listID': 'HS',
-                        'listVersionID': '1.0',
-                    },
-                })
-        item_vals['pint_ae_commodity_classifications'] = pint_classifications
-
-        # ── BTAE-17: Service accounting code (CommodityClassification/ItemClassificationCode[@listID='SAC'])
-        sac = getattr(line, 'tca_service_accounting_code', None) or ''
-        if sac:
-            pint_classifications.append({
-                'item_classification_code': sac,
-                'item_classification_code_attrs': {
-                    'listID': 'SAC',
-                },
-            })
-
-        # ── BTAE-24: Lot number (exports) ─────────────────────────────────────
-        lot_number = getattr(line, 'tca_lot_number', None) or ''
-        if lot_number:
-            item_vals['btae_24_lot_number'] = lot_number
-
-        vals['item_vals'] = item_vals
-        return vals
-
-    # ──────────────────────────────────────────────────────────────────────────
-    # INVOICE PERIOD — BTAE-06 billing frequency
-    # ──────────────────────────────────────────────────────────────────────────
-
-    def _get_invoice_period_vals_list(self, invoice):
-        """
-        EXTENDS account.edi.xml.ubl_20.
-        Adds BTAE-06 billing frequency code and IBT-073/074 period dates.
-        """
-        vals_list = super()._get_invoice_period_vals_list(invoice)
-        freq = invoice.tca_billing_frequency or ''
-        start = invoice.tca_invoice_period_start
-        end = invoice.tca_invoice_period_end
-        if freq or start or end:
-            if vals_list:
-                entry = vals_list[0]
-            else:
-                entry = {}
-                vals_list = [entry]
-            if freq:
-                entry['description_code'] = freq
-            if start:
-                entry['start_date'] = start
-            if end:
-                entry['end_date'] = end
-        return vals_list
-
-    # ──────────────────────────────────────────────────────────────────────────
-    # ibr-191-ae: suppress PaymentMeans for credit notes and Deemed Supply.
-    # The PINT AE schematron asserts the EQUIVALENCE
-    #   exists(PaymentMeansCode) ⇔ NOT (CreditNote OR DeemedSupply)
-    # which means credit notes (381/81/261) and Deemed-Supply invoices MUST
-    # NOT carry a <cac:PaymentMeans> element. Returning [] suppresses the
-    # entire group in the rendered XML.
-    # ──────────────────────────────────────────────────────────────────────────
-
-    def _get_invoice_payment_means_vals_list(self, invoice):
-        """EXTENDS account.edi.xml.ubl_bis3.
-        ibr-191-ae: credit notes (381/81/261) and Deemed-Supply invoices MUST NOT
-        carry a <cac:PaymentMeans> element. Returning [] suppresses the entire
-        group in the rendered XML (the QWeb t-foreach loop simply iterates 0×).
-        """
-        is_credit_note = invoice.move_type in ('out_refund', 'in_refund')
-        flags = (invoice.tca_transaction_type_flags or '00000000').ljust(8, '0')
-        deemed_supply = flags[1] == '1'
-        if is_credit_note or deemed_supply:
-            return []
-        return super()._get_invoice_payment_means_vals_list(invoice)
-
-    # ──────────────────────────────────────────────────────────────────────────
-    # DELIVERY VALS — BTAE-22 Incoterms
-    # ──────────────────────────────────────────────────────────────────────────
-
-    def _get_delivery_vals_list(self, invoice):
-        """
-        EXTENDS account.edi.xml.ubl_bis3.
-        Adds ActualDeliveryDate (IBT-072), DeliveryTerms/Incoterms (BTAE-22),
-        and DeliveryParty TRN (BTAE-23).
-        """
-        vals_list = super()._get_delivery_vals_list(invoice)
-        incoterms = invoice.tca_incoterms or ''
-        delivery_date = invoice.tca_delivery_date
-        delivery_trn = invoice.tca_delivery_party_trn or ''
-        if incoterms or delivery_date or delivery_trn:
-            if vals_list:
-                entry = vals_list[0]
-            else:
-                entry = {}
-                vals_list = [entry]
-            if delivery_date:
-                entry['actual_delivery_date'] = delivery_date
-            if incoterms:
-                entry['delivery_terms_vals'] = {
-                    'id': incoterms,
-                    'id_attrs': {'schemeID': 'Incoterms'},
-                }
-            if delivery_trn:
-                entry['delivery_party_vals'] = {
-                    'party_identification_vals': [{'id': delivery_trn}],
-                }
-        return vals_list
-
-    # ──────────────────────────────────────────────────────────────────────────
-    # ADDITIONAL DOCUMENT REFERENCES — export BTAE-20 as AdditionalDocumentReference
-    # ──────────────────────────────────────────────────────────────────────────
-
-    def _get_pricing_exchange_rate_vals_list(self, invoice):
-        """
-        EXTENDS account.edi.xml.ubl_20.
-        Adds PricingExchangeRate when invoice currency != AED (for exports).
-        Uses the parent's foreach mechanism — no template xpath needed.
-        """
-        vals_list = super()._get_pricing_exchange_rate_vals_list(invoice)
-        aed = self.env.ref('base.AED', raise_if_not_found=False) or invoice.company_id.currency_id
-        if invoice.currency_id and invoice.currency_id != aed and not vals_list:
-            rate = self.env['res.currency']._get_conversion_rate(
-                invoice.currency_id, aed, invoice.company_id,
-                invoice.invoice_date or fields.Date.today(),
-            )
-            vals_list.append({
-                'source_currency_code': invoice.currency_id.name,
-                'target_currency_code': aed.name,
-                'calculation_rate': round(rate, 6),
-            })
-        return vals_list
-
-    def _get_additional_document_reference_list(self, invoice):
-        """
-        EXTENDS account.edi.xml.ubl_20.
-        For exports with foreign currency, adds BTAE-20 as AdditionalDocumentReference
-        with DocumentTypeCode 'aedtotal-incl-vat'.
-        """
-        vals_list = super()._get_additional_document_reference_list(invoice)
-        aed = self.env.ref('base.AED', raise_if_not_found=False) or invoice.company_id.currency_id
-        if invoice.currency_id and invoice.currency_id != aed:
-            # Convert total inclusive of VAT to AED
-            aed_total = round(invoice.currency_id._convert(
-                abs(invoice.amount_total), aed, invoice.company_id,
-                invoice.invoice_date or fields.Date.today(),
-            ), 2)
-            vals_list.append({
-                'id': 'aedtotal-incl-vat',
-                'document_type_code': 'aedtotal-incl-vat',
-                'document_description': str(aed_total),
-            })
-        return vals_list
-
-    # ──────────────────────────────────────────────────────────────────────────
-    # MAIN EXPORT — root-level PINT AE fields
-    # ──────────────────────────────────────────────────────────────────────────
-
-    def _export_invoice_vals(self, invoice):
-        """
-        EXTENDS account.edi.xml.ubl_bis3.
-        Overrides customization_id/profile_id and injects all UAE-specific
-        root-level fields:
-          - CustomizationID → PINT AE value (or self-billing variant)
-          - ProfileID        → urn:peppol:bis:billing (or selfbilling)
-          - ProfileExecutionID (BTAE-02) — 8-digit flags from tca_transaction_type_flags
-          - UUID (BTAE-07)
-          - IssueTime (IBT-168)
-          - TaxExchangeRate/CalculationRate (BTAE-04) when currency != AED
-          - PricingExchangeRate (for exports with foreign currency)
-          - BuyerCustomerParty/PartyIdentification (BTAE-01)
-          - SellerSupplierParty/PartyIdentification (BTAE-14) for disclosed agent
-          - DiscrepancyResponse/ResponseCode (BTAE-03) on credit notes
-          - ContractDocumentReference/DocumentDescription (BTAE-05)
-          - StatementDocumentReference (BTAE-21) for exports
-          - Invoice type code 480/81 from tca_invoice_type_code
-          - InvoicePeriod/Description (BTAE-06) via _get_invoice_period_vals_list
-        """
-        # Stash buyer overrides on env context so per-party builder hooks can
-        # apply invoice-level field values to the buyer only (not supplier).
-        buyer_partner = invoice.partner_id.commercial_partner_id
-        passport_country = invoice.tca_buyer_passport_country_id
-        self = self.with_context(
-            tca_buyer_partner_id=buyer_partner.id,
-            tca_buyer_emirate_override=invoice.tca_buyer_emirate or '',
-            tca_buyer_legal_id_type_override=invoice.tca_buyer_legal_id_type or '',
-            tca_buyer_trade_license_override=invoice.tca_buyer_trade_license or '',
-            tca_buyer_legal_authority_override=invoice.tca_buyer_legal_authority or '',
-            tca_buyer_passport_country_code_override=(passport_country.code if passport_country else ''),
+        # BTAE-08: per-line VAT — sum of the line's VAT tax amounts. Excise
+        # and recycling-contribution taxes ride on the same line but are
+        # reported as AllowanceCharges, not VAT; exclude them so BTAE-08
+        # doesn't over-report on UAE excise products (tobacco, energy /
+        # sugary drinks).
+        line_vat = sum(
+            td.get('tax_amount_currency', 0.0)
+            for td in base_line['tax_details'].get('taxes_data', [])
+            if not self._ubl_is_excise_tax(td)
+            and not self._ubl_is_recycling_contribution_tax(td)
         )
-        vals = super()._export_invoice_vals(invoice)
+        # Net line amount = LineExtensionAmount already on the node.
+        line_net = float((line_node.get('cbc:LineExtensionAmount') or {}).get('_text') or 0.0)
 
-        # ── Override CustomizationID & ProfileID ─────────────────────────────
-        if invoice.tca_is_self_billing:
-            vals['vals']['customization_id'] = PINT_AE_SELFBILLING_CUSTOMIZATION_ID
-            vals['vals']['profile_id'] = PINT_AE_SELFBILLING_PROFILE_ID
-        else:
-            vals['vals']['customization_id'] = PINT_AE_CUSTOMIZATION_ID
-            vals['vals']['profile_id'] = PINT_AE_PROFILE_ID
-
-        # ── BTAE-02: ProfileExecutionID ───────────────────────────────────────
-        vals['vals']['profile_execution_id'] = self._get_profile_execution_id(invoice)
-
-        # ── BTAE-07: UUID ──────────────────────────────────────────────────────
-        vals['vals']['uuid'] = str(_uuid_mod.uuid4())
-
-        # ── IssueTime (IBT-168) ───────────────────────────────────────────────
-        if invoice.invoice_date:
-            vals['vals']['issue_time'] = fields.Datetime.now().strftime('%H:%M:%S')
-
-        # ── IBT-007: TaxPointDate ─────────────────────────────────────────────
-        if invoice.tca_tax_point_date:
-            vals['vals']['tax_point_date'] = invoice.tca_tax_point_date
-
-        # ── IBT-019: Buyer accounting reference ───────────────────────────────
-        if invoice.tca_buyer_accounting_ref:
-            vals['vals']['accounting_cost'] = invoice.tca_buyer_accounting_ref
-
-        # ── IBT-010: Buyer reference ──────────────────────────────────────────
-        if invoice.tca_buyer_reference:
-            vals['vals']['buyer_reference'] = invoice.tca_buyer_reference
-
-        # ── BTAE-04: Currency exchange rate ────────────────────────────────────
-        aed = self.env.ref('base.AED', raise_if_not_found=False) or invoice.company_id.currency_id
-        if invoice.currency_id and invoice.currency_id != aed:
-            rate = self.env['res.currency']._get_conversion_rate(
-                invoice.currency_id,
-                aed,
-                invoice.company_id,
-                invoice.invoice_date or fields.Date.today(),
-            )
-            # PINT AE rule ibr-002-ae: max 6 decimal places
-            vals['vals']['tax_exchange_rate'] = round(rate, 6)
-            vals['vals']['tax_exchange_rate_currency_code'] = invoice.currency_id.name
-            vals['vals']['tax_exchange_rate_base_currency_code'] = aed.name
-
-        # ── BTAE-01: Buyer internal identification (BuyerCustomerParty) ───────
-        buyer = invoice.partner_id.commercial_partner_id
-        if buyer.ref:
-            vals['vals']['buyer_customer_party_id'] = buyer.ref
-
-        # ── BTAE-14: Principal TRN (SellerSupplierParty) for disclosed agent ──
-        if invoice.tca_principal_id:
-            vals['vals']['seller_supplier_party_id'] = invoice.tca_principal_id
-
-        # ── BTAE-03: Credit note reason code (DiscrepancyResponse) ────────────
-        if (invoice.tca_uncl1001_code or '') in ('381', '81'):
-            vals['vals']['btae_03_reason'] = invoice.tca_credit_note_reason or ''
-
-        # ── IBG-03: Preceding invoice reference for credit notes ──────────────
-        # PINT AE requires <cac:BillingReference> to point at the original
-        # invoice (except for Volume Discount credit notes). Populated from
-        # the Odoo reversal link (reversed_entry_id) set by the Credit Note
-        # wizard. Parent bis3 only populates this for Netherlands suppliers —
-        # we extend it for UAE.
-        if invoice.reversed_entry_id:
-            vals['vals']['billing_reference_vals'] = {
-                'id': invoice.reversed_entry_id.name,
-                'issue_date': invoice.reversed_entry_id.invoice_date,
+        # BTAE-10 + BTAE-08: ItemPriceExtension (amount payable + per-line VAT).
+        line_node['cac:ItemPriceExtension'] = {
+            'cbc:Amount': {
+                '_text': FloatFmt(line_net + line_vat, min_dp=dp),
+                'currencyID': currency.name,
+            },
+            'cac:TaxTotal': {
+                'cbc:TaxAmount': {
+                    '_text': FloatFmt(line_vat, min_dp=dp),
+                    'currencyID': currency.name,
+                },
+            },
+        }
+        # Line-level TaxTotal — BIS3 drops it; PINT AE (BTAE-08) needs it.
+        line_node['cac:TaxTotal'] = [{
+            'cbc:TaxAmount': {
+                '_text': FloatFmt(line_vat, min_dp=dp),
+                'currencyID': currency.name,
+            },
+        }]
+        # IBT-127: line note. Append (not replace) so any upstream-set note
+        # survives — bis3's `_ubl_add_line_note_nodes` initialises cbc:Note
+        # as [], but a future cross-cutting localization could add to it.
+        if line.tca_line_note:
+            line_node.setdefault('cbc:Note', []).append({'_text': line.tca_line_note})
+        # IBT-132: order line reference.
+        if line.tca_order_line_ref:
+            line_node['cac:OrderLineReference'] = {
+                'cbc:LineID': {'_text': line.tca_order_line_ref},
             }
-
-        # ── BTAE-05: Contract value (ContractDocumentReference/DocumentDescription)
-        if invoice.tca_contract_value or invoice.tca_contract_reference:
-            vals['vals']['btae_05_contract_value'] = invoice.tca_contract_value or ''
-            vals['vals']['contract_reference'] = invoice.tca_contract_reference or ''
-
-        # ── IBT-011: Project reference ────────────────────────────────────────
-        if invoice.tca_project_reference:
-            vals['vals']['project_reference'] = invoice.tca_project_reference
-
-        # ── BTAE-21: Export declaration number (StatementDocumentReference) ────
-        if invoice.tca_export_declaration_number:
-            vals['vals']['btae_21_export_declaration'] = invoice.tca_export_declaration_number
-
-        # ── IBT-003: Invoice type code — UNCL1001 string emitted in the XML ──
-        # Self-billing variants (380_sb, 381_sb) emit the bare 380/381 (parent default);
-        # OOS codes (480, 81) are explicitly overridden here.
-        uncl_code = invoice.tca_uncl1001_code or ''
-        if uncl_code in ('480', '81'):
-            vals['vals']['document_type_code'] = int(uncl_code)
-
-        # ── Override template references to use PINT AE templates ─────────────
-        vals['PartyType_template'] = 'account_tca_peppol.pint_ae_PartyType'
-        vals['InvoiceType_template'] = 'account_tca_peppol.pint_ae_InvoiceType'
-        vals['CreditNoteType_template'] = 'account_tca_peppol.pint_ae_CreditNoteType'
-        vals['InvoiceLineType_template'] = 'account_tca_peppol.pint_ae_InvoiceLineType'
-        vals['CreditNoteLineType_template'] = 'account_tca_peppol.pint_ae_CreditNoteLineType'
-        vals['TaxTotalType_template'] = 'account_tca_peppol.pint_ae_TaxTotalType'
-        vals['TaxCategoryType_template'] = 'account_tca_peppol.pint_ae_TaxCategoryType'
-        vals['DeliveryType_template'] = 'account_tca_peppol.pint_ae_DeliveryType'
-
-        return vals
+        # IBG-26: line invoice period.
+        if line.tca_line_period_start or line.tca_line_period_end:
+            period = {}
+            if line.tca_line_period_start:
+                period['cbc:StartDate'] = {'_text': line.tca_line_period_start}
+            if line.tca_line_period_end:
+                period['cbc:EndDate'] = {'_text': line.tca_line_period_end}
+            line_node.setdefault('cac:InvoicePeriod', []).append(period)
+        # BTAE-24: lot number (exports).
+        lot = getattr(line, 'tca_lot_number', '') or ''
+        if lot and line_node.get('cac:Item'):
+            line_node['cac:Item']['cac:ItemInstance'] = {
+                'cac:LotIdentification': {'cbc:LotNumberID': {'_text': lot}},
+            }
+        return line_node
 
     # ──────────────────────────────────────────────────────────────────────────
     # CONSTRAINTS — UAE-specific validation before export
@@ -830,34 +765,11 @@ class AccountEdiXmlUBLPintAe(models.AbstractModel):
         EXTENDS account.edi.xml.ubl_bis3.
         Adds UAE-specific pre-export validation.
 
-        Also pads payment_means_vals_list around the super() call: our
-        _get_invoice_payment_means_vals_list returns [] for credit notes and
-        Deemed Supply (per ibr-191-ae), but bis3's parent constraint check
-        blindly indexes payment_means_vals_list[0]. Pad an inert entry so the
-        indexing succeeds, then restore the empty list so the XML template
-        still emits no PaymentMeans element.
+        Odoo 19: the old payment_means_vals_list padding hack is gone — the
+        rewritten bis3 constraints read the node tree (vals['document_node'])
+        directly, so no `vals['vals']` shim is needed.
         """
-        is_credit_note = invoice.move_type in ('out_refund', 'in_refund')
-        flags = (invoice.tca_transaction_type_flags or '00000000').ljust(8, '0')
-        deemed_supply = flags[1] == '1'
-        # Sentinel object to distinguish "key absent" from "key present with
-        # value None" — defensive restore even if the key shape changes upstream.
-        _PMM_MISSING = object()
-        _pmm_original = vals['vals'].get('payment_means_vals_list', _PMM_MISSING)
-        _pmm_pad = False
-        if (is_credit_note or deemed_supply) and not _pmm_original:
-            vals['vals']['payment_means_vals_list'] = [{'payment_means_code': 0}]
-            _pmm_pad = True
-        try:
-            constraints = super()._export_invoice_constraints(invoice, vals)
-        finally:
-            if _pmm_pad:
-                # Restore exactly what was there (vs. blindly resetting to [])
-                # so repeated callers see consistent state.
-                if _pmm_original is _PMM_MISSING:
-                    vals['vals'].pop('payment_means_vals_list', None)
-                else:
-                    vals['vals']['payment_means_vals_list'] = _pmm_original
+        constraints = super()._export_invoice_constraints(invoice, vals)
 
         supplier = invoice.company_id.partner_id.commercial_partner_id
         customer = invoice.partner_id.commercial_partner_id
@@ -1014,11 +926,7 @@ class AccountEdiXmlUBLPintAe(models.AbstractModel):
 
         # ── BTAE-09: RC description required for reverse charge lines ─────────
         for line in invoice.invoice_line_ids.filtered(lambda l: l.display_type == 'product'):
-            has_rc_tax = any(
-                t.tca_tax_category == 'AE'
-                for t in line.tax_ids
-                if hasattr(t, 'tca_tax_category')
-            )
+            has_rc_tax = any(t.tca_tax_category == 'AE' for t in line.tax_ids)
             if has_rc_tax and not line.tca_rc_description:
                 constraints[f'pint_ae_btae_09_{line.id}'] = _(
                     'Line "%s" uses Reverse Charge VAT. '
@@ -1097,7 +1005,7 @@ class AccountEdiXmlUBLPintAe(models.AbstractModel):
         # ── ibr-190-ae: Standard rated (S) → rate must be 5.00 ────────────────
         for line in invoice.invoice_line_ids.filtered(lambda l: l.display_type == 'product'):
             for tax in line.tax_ids:
-                if hasattr(tax, 'tca_tax_category') and tax.tca_tax_category == 'S':
+                if tax.tca_tax_category == 'S':
                     if tax.amount != 5.0:
                         constraints['pint_ae_s_rate'] = _(
                             '[ibr-190-ae] Standard rated (S) VAT must be exactly 5.00%%. '
@@ -1283,13 +1191,14 @@ class AccountEdiXmlUBLPintAe(models.AbstractModel):
     }
     _INVOICE_TYPE_KEYS = {'380', '381', '480', '81'}
 
-    def _import_fill_invoice_form(self, invoice, tree, qty_factor):
+    def _import_fill_invoice(self, invoice, tree, qty_factor):
         """
-        EXTENDS account.edi.xml.ubl_20.
+        EXTENDS account.edi.xml.ubl_20 (renamed from _import_fill_invoice_form
+        in Odoo 19).
         After the base UBL importer fills standard fields, read PINT AE-specific
-        elements and populate TCA fields on the invoice.
+        elements and populate TCA fields on the invoice (document + lines).
         """
-        logs = super()._import_fill_invoice_form(invoice, tree, qty_factor)
+        logs = super()._import_fill_invoice(invoice, tree, qty_factor)
 
         # ── BTAE-02: ProfileExecutionID → transaction type flags ──────────
         node = tree.find('./{*}ProfileExecutionID')
@@ -1411,29 +1320,35 @@ class AccountEdiXmlUBLPintAe(models.AbstractModel):
         if node is not None and node.text:
             invoice.tca_principal_id = node.text.strip()
 
+        logs += self._tca_import_fill_lines(invoice, tree, qty_factor)
         return logs
 
-    def _import_fill_invoice_line_form_batched(self, trees, invoice_lines, qty_factor):
-        """
-        EXTENDS account.edi.xml.ubl_20.
-        After the base importer fills standard line fields, read PINT AE-specific
-        per-line elements and populate TCA fields.
-        """
-        logs = super()._import_fill_invoice_line_form_batched(trees, invoice_lines, qty_factor)
+    def _tca_import_fill_lines(self, invoice, tree, qty_factor):
+        """Read PINT AE per-line elements into the matching move lines. Odoo 19
+        dropped the per-line import hook (_import_fill_invoice_line_form_batched),
+        so pair the XML lines with the product lines positionally — _import_lines
+        preserves document order."""
+        logs = []
+        line_tag = ('CreditNoteLine'
+                    if invoice.move_type in ('out_refund', 'in_refund')
+                    else 'InvoiceLine')
+        line_trees = tree.findall('./{*}' + line_tag)
+        product_lines = invoice.invoice_line_ids.filtered(
+            lambda l: l.display_type == 'product')
 
-        for tree, line in zip(trees, invoice_lines):
+        for line_tree, line in zip(line_trees, product_lines):
             # ── BTAE-13: CommodityCode → commodity type (G/S/B) ──────────
-            node = tree.find('.//{*}CommodityClassification/{*}CommodityCode')
+            node = line_tree.find('.//{*}CommodityClassification/{*}CommodityCode')
             if node is not None and node.text and node.text.strip() in ('G', 'S', 'B'):
                 line.tca_commodity_type = node.text.strip()
 
             # ── BTAE-09: NatureCode → RC description ─────────────────────
-            node = tree.find('.//{*}CommodityClassification/{*}NatureCode')
+            node = line_tree.find('.//{*}CommodityClassification/{*}NatureCode')
             if node is not None and node.text:
                 line.tca_rc_description = node.text.strip()
 
             # ── IBT-158 / BTAE-17: ItemClassificationCode (HS + SAC) ─────
-            for cls_node in tree.findall('.//{*}CommodityClassification/{*}ItemClassificationCode'):
+            for cls_node in line_tree.findall('.//{*}CommodityClassification/{*}ItemClassificationCode'):
                 list_id = cls_node.attrib.get('listID', '')
                 if cls_node.text:
                     if list_id == 'HS':
@@ -1442,17 +1357,17 @@ class AccountEdiXmlUBLPintAe(models.AbstractModel):
                         line.tca_service_accounting_code = cls_node.text.strip()
 
             # ── IBT-155: SellersItemIdentification (store, not just lookup)
-            node = tree.find('.//{*}Item/{*}SellersItemIdentification/{*}ID')
+            node = line_tree.find('.//{*}Item/{*}SellersItemIdentification/{*}ID')
             if node is not None and node.text:
                 line.tca_seller_item_id = node.text.strip()
 
             # ── IBT-156: BuyersItemIdentification ─────────────────────────
-            node = tree.find('.//{*}Item/{*}BuyersItemIdentification/{*}ID')
+            node = line_tree.find('.//{*}Item/{*}BuyersItemIdentification/{*}ID')
             if node is not None and node.text:
                 line.tca_buyer_item_id = node.text.strip()
 
             # ── IBT-157: StandardItemIdentification ───────────────────────
-            node = tree.find('.//{*}Item/{*}StandardItemIdentification/{*}ID')
+            node = line_tree.find('.//{*}Item/{*}StandardItemIdentification/{*}ID')
             if node is not None and node.text:
                 line.tca_standard_item_id = node.text.strip()
                 scheme = node.attrib.get('schemeID', '')
@@ -1460,22 +1375,22 @@ class AccountEdiXmlUBLPintAe(models.AbstractModel):
                     line.tca_standard_item_scheme = scheme
 
             # ── IBT-132: OrderLineReference ───────────────────────────────
-            node = tree.find('./{*}OrderLineReference/{*}LineID')
+            node = line_tree.find('./{*}OrderLineReference/{*}LineID')
             if node is not None and node.text:
                 line.tca_order_line_ref = node.text.strip()
 
             # ── IBT-127: Line Note ────────────────────────────────────────
-            node = tree.find('./{*}Note')
+            node = line_tree.find('./{*}Note')
             if node is not None and node.text:
                 line.tca_line_note = node.text.strip()
 
             # ── BTAE-24: LotNumber ────────────────────────────────────────
-            node = tree.find('.//{*}ItemInstance/{*}LotIdentification/{*}LotNumberID')
+            node = line_tree.find('.//{*}ItemInstance/{*}LotIdentification/{*}LotNumberID')
             if node is not None and node.text:
                 line.tca_lot_number = node.text.strip()
 
             # ── IBT-134/135: Line InvoicePeriod ──────────────────────────
-            period = tree.find('./{*}InvoicePeriod')
+            period = line_tree.find('./{*}InvoicePeriod')
             if period is not None:
                 start = period.find('./{*}StartDate')
                 if start is not None and start.text:
@@ -1492,6 +1407,4 @@ class AccountEdiXmlUBLPintAe(models.AbstractModel):
 
     def _is_reverse_charge_tax(self, tax):
         """Return True if the tax is a UAE reverse-charge (AE category) tax."""
-        if hasattr(tax, 'tca_tax_category'):
-            return tax.tca_tax_category == 'AE'
-        return 'reverse' in (tax.name or '').lower()
+        return tax.tca_tax_category == 'AE'

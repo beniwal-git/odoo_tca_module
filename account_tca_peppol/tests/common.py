@@ -153,6 +153,7 @@ class TcaTestCase(TransactionCase):
                 'name': 'Consulting Services',
                 'quantity': quantity,
                 'price_unit': price_unit,
+                'product_uom_id': self.env.ref('uom.product_uom_unit').id,
                 'tax_ids': [(6, 0, [self.tax_5.id])],
                 'account_id': self.revenue_account.id,
                 'tca_commodity_type': commodity_type,

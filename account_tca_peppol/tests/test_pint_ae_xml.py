@@ -257,6 +257,7 @@ class TestPintAeXmlConstraints(TcaTestCase):
                 'name': 'Test line',
                 'quantity': 1.0,
                 'price_unit': 100.0,
+                'product_uom_id': self.env.ref('uom.product_uom_unit').id,
                 'tax_ids': [(6, 0, [self.tax_5.id])],
                 'account_id': self.revenue_account.id,
                 'tca_commodity_type': 'S',
@@ -293,6 +294,7 @@ class TestPintAeXmlConstraints(TcaTestCase):
                 'name': 'Test line',
                 'quantity': 1.0,
                 'price_unit': 100.0,
+                'product_uom_id': self.env.ref('uom.product_uom_unit').id,
                 'tax_ids': [(6, 0, [self.tax_5.id])],
                 'account_id': self.revenue_account.id,
                 'tca_commodity_type': 'S',
@@ -325,6 +327,7 @@ class TestPintAeXmlConstraints(TcaTestCase):
                 'name': 'No commodity type set',
                 'quantity': 2.0,
                 'price_unit': 50.0,
+                'product_uom_id': self.env.ref('uom.product_uom_unit').id,
                 'tax_ids': [(6, 0, [self.tax_5.id])],
                 'account_id': self.revenue_account.id,
                 # tca_commodity_type intentionally omitted

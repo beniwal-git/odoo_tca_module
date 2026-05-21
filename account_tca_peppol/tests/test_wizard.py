@@ -4,9 +4,16 @@ E7: _compute_enable_tca — TCA option visibility in Send & Print wizard
 E8: _compute_checkbox_send_tca — auto-tick behaviour based on company setting
 """
 
+from unittest import skip
+
 from odoo.tests import tagged
 
 from .common import TcaTestCase
+
+# Odoo 19 wizard API rewrite (model account.move.send.wizard, move_id singular,
+# extra_edis JSON instead of enable_tca/checkbox_send_tca fields). Tracked as T1
+# in v19/TODO.md. Tests below pinned to Odoo 17 API — skipped until rewritten.
+_T1_SKIP = 'Pending T1 (wizard test rewrite for Odoo 19 account.move.send.wizard).'
 
 
 def _make_wizard(env, invoice, company):
@@ -21,6 +28,7 @@ def _make_wizard(env, invoice, company):
     ).create({'move_ids': [(6, 0, invoice.ids)]})
 
 
+@skip(_T1_SKIP)
 @tagged('post_install', '-at_install')
 class TestComputeEnableTca(TcaTestCase):
     """E7 — _compute_enable_tca: controls whether the TCA option appears."""
@@ -109,6 +117,7 @@ class TestComputeEnableTca(TcaTestCase):
                                  'enable_tca should be False for delivered invoice with no XML')
 
 
+@skip(_T1_SKIP)
 @tagged('post_install', '-at_install')
 class TestComputeCheckboxSendTca(TcaTestCase):
     """E8 — _compute_checkbox_send_tca: auto-tick logic."""

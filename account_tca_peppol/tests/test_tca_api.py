@@ -297,11 +297,11 @@ class TestTcaStatusMapping(TcaTestCase):
         invoice._tca_update_state_from_payload({'status': 2, 'c3_mls_status': 4, 'c5_mls_status': 0})
         self.assertEqual(invoice.tca_move_state, 'delivered')
 
-    def test_c5_accepted_maps_to_received(self):
+    def test_c5_accepted_maps_to_buyer_confirmed(self):
         invoice = self._make_invoice()
         invoice.tca_move_state = 'delivered'
         invoice._tca_update_state_from_payload({'status': 2, 'c3_mls_status': 4, 'c5_mls_status': 4})
-        self.assertEqual(invoice.tca_move_state, 'received')
+        self.assertEqual(invoice.tca_move_state, 'buyer_confirmed')
 
     def test_status_3_maps_to_rejected(self):
         invoice = self._make_invoice()

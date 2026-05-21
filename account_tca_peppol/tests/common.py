@@ -11,6 +11,7 @@ Provides TcaTestCase, a TransactionCase subclass that sets up:
 All HTTP calls must be mocked in individual tests — no live network calls are made.
 """
 
+from odoo import fields
 from odoo.tests import TransactionCase, tagged
 
 
@@ -148,6 +149,7 @@ class TcaTestCase(TransactionCase):
             'partner_id': (partner or self.partner).id,
             'company_id': self.company.id,
             'journal_id': self.journal.id,
+            'invoice_date': fields.Date.today(),
             'tca_buyer_reference': 'PO-TEST-001',
             'invoice_line_ids': [(0, 0, {
                 'name': 'Consulting Services',

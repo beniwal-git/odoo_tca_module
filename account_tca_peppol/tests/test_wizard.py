@@ -255,12 +255,12 @@ class TestInvoiceCancelBlock(TcaTestCase):
         with self.assertRaises(UserError):
             invoice.button_draft()
 
-    def test_action_tca_resend_resets_state(self):
+    def test_action_tca_resend_opens_wizard(self):
         """
-        action_tca_resend on an error invoice must:
-          1. Reset tca_move_state → 'not_sent'
-          2. Clear tca_submission_error
-          3. Return a window action dict
+        action_tca_resend on an error invoice (no tca_invoice_uuid) must:
+          1. Return a window action dict opening the Send & Print wizard
+          2. Preserve tca_move_state / tca_submission_error so the prior error
+             stays visible if the user cancels the wizard
         """
         invoice = self._make_invoice()
         invoice.write({
@@ -268,8 +268,8 @@ class TestInvoiceCancelBlock(TcaTestCase):
             'tca_submission_error': 'Connection timeout',
         })
         result = invoice.action_tca_resend()
-        self.assertEqual(invoice.tca_move_state, 'not_sent')
-        self.assertFalse(invoice.tca_submission_error)
+        self.assertEqual(invoice.tca_move_state, 'error')
+        self.assertEqual(invoice.tca_submission_error, 'Connection timeout')
         self.assertEqual(result.get('type'), 'ir.actions.act_window')
         self.assertEqual(result.get('res_model'), 'account.move.send')
 

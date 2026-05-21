@@ -9,6 +9,7 @@ import time
 from unittest.mock import MagicMock, patch
 
 from odoo.tests import tagged
+from odoo.tools import mute_logger
 
 from .common import TcaTestCase
 
@@ -138,6 +139,7 @@ class TestTcaApiTokenManagement(TcaTestCase):
         body = json.loads(req_obj.data.decode())
         self.assertEqual(body['refresh_token'], 'my_refresh_token')
 
+    @mute_logger('odoo.addons.account_tca_peppol.services.tca_api')
     def test_refresh_fallback_to_full_reauth(self):
         """If refresh fails, _get_valid_token must fall back to full client_credentials flow."""
         near_expiry = int(time.time()) + 10

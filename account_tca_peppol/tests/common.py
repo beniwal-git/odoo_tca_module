@@ -125,7 +125,6 @@ class TcaTestCase(TransactionCase):
         cls.revenue_account = cls.env['account.account'].with_company(cls.company).search([
             ('account_type', '=', 'income'),
             ('company_ids', 'in', cls.company.id),
-            ('deprecated', '=', False),
         ], limit=1)
         if not cls.revenue_account:
             cls.revenue_account = cls.env['account.account'].create({

@@ -125,6 +125,18 @@ class AccountMoveLine(models.Model):
              'Used by validation and XML emission so inference happens once.',
     )
 
+    @api.depends('product_id')
+    def _compute_product_uom_id(self):
+        """Extend upstream: fall back to "Units" when the line has no product.
+        PINT AE IBT-130 (Unit of Measure) is mandatory — free-text lines would
+        otherwise have an empty product_uom_id and fail the compliance gate."""
+        super()._compute_product_uom_id()
+        default_uom = self.env.ref('uom.product_uom_unit', raise_if_not_found=False)
+        if not default_uom:
+            return
+        for line in self.filtered(lambda l: l.parent_state == 'draft' and not l.product_uom_id):
+            line.product_uom_id = default_uom
+
     @api.depends('tca_commodity_type', 'product_id', 'product_id.type')
     def _compute_tca_effective_commodity_type(self):
         for line in self:

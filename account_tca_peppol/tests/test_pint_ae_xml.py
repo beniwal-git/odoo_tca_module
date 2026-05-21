@@ -245,7 +245,7 @@ class TestPintAeXmlConstraints(TcaTestCase):
             'name': 'No Peppol Partner',
             'country_id': self.uae.id,
             'vat': '300000000000003',
-            'ubl_cii_format': 'ubl_pint_ae',
+            'invoice_edi_format': 'ubl_pint_ae',
             # Intentionally no peppol_eas / peppol_endpoint
         })
         invoice = self.env['account.move'].with_company(self.company).create({
@@ -280,8 +280,8 @@ class TestPintAeXmlConstraints(TcaTestCase):
             'name': 'No VAT Partner',
             'country_id': self.uae.id,
             'peppol_eas': '0235',
-            'peppol_endpoint': '400000000000003',
-            'ubl_cii_format': 'ubl_pint_ae',
+            'peppol_endpoint': '1000000003',
+            'invoice_edi_format': 'ubl_pint_ae',
             # Intentionally no VAT/TRN
         })
         invoice = self.env['account.move'].with_company(self.company).create({
@@ -372,7 +372,7 @@ class TestPintAeBtae02ExportFlag(TcaTestCase):
             'vat': 'GB123456789',
             'peppol_eas': '0088',
             'peppol_endpoint': '1234567890',
-            'ubl_cii_format': 'ubl_pint_ae',
+            'invoice_edi_format': 'ubl_pint_ae',
         })
 
     def _get_pei(self, invoice):

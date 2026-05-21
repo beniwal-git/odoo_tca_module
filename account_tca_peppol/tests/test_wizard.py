@@ -46,7 +46,7 @@ class TestComputeEnableTca(TcaTestCase):
             'name': 'Non-UAE Partner',
             'country_id': self.env.ref('base.de', raise_if_not_found=False).id
                 if self.env.ref('base.de', raise_if_not_found=False) else self.uae.id,
-            'ubl_cii_format': 'ubl_bis3',
+            'invoice_edi_format': 'ubl_bis3',
         })
         invoice = self.env['account.move'].with_company(self.company).create({
             'move_type': 'out_invoice',
@@ -153,7 +153,7 @@ class TestComputeCheckboxSendTca(TcaTestCase):
         incomplete_partner = self.env['res.partner'].create({
             'name': 'Incomplete Peppol Partner',
             'country_id': self.uae.id,
-            'ubl_cii_format': 'ubl_pint_ae',
+            'invoice_edi_format': 'ubl_pint_ae',
             # No peppol_eas, no peppol_endpoint
         })
         invoice = self.env['account.move'].with_company(self.company).create({

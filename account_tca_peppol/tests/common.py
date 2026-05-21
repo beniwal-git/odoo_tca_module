@@ -70,7 +70,7 @@ class TcaTestCase(TransactionCase):
             'vat': '200000000000003',
             'peppol_eas': '0235',
             'peppol_endpoint': '1000000002',
-            'ubl_cii_format': 'ubl_pint_ae',
+            'invoice_edi_format': 'ubl_pint_ae',
             'tca_emirate': 'AUH',
             'tca_legal_id_type': 'TL',
             'tca_trade_license': 'ADDED-2024-999',

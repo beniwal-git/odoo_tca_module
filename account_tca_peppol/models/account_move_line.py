@@ -134,8 +134,18 @@ class AccountMoveLine(models.Model):
         default_uom = self.env.ref('uom.product_uom_unit', raise_if_not_found=False)
         if not default_uom:
             return
-        for line in self.filtered(lambda l: l.parent_state == 'draft' and not l.product_uom_id):
+        for line in self.filtered(lambda l: not l.product_uom_id and l.display_type == 'product'):
             line.product_uom_id = default_uom
+
+    @api.model_create_multi
+    def create(self, vals_list):
+        """Belt-and-suspenders: ensure product_uom_id is set on free-text product lines."""
+        default_uom = self.env.ref('uom.product_uom_unit', raise_if_not_found=False)
+        if default_uom:
+            for vals in vals_list:
+                if vals.get('display_type', 'product') == 'product' and not vals.get('product_uom_id') and not vals.get('product_id'):
+                    vals['product_uom_id'] = default_uom.id
+        return super().create(vals_list)
 
     @api.depends('tca_commodity_type', 'product_id', 'product_id.type')
     def _compute_tca_effective_commodity_type(self):

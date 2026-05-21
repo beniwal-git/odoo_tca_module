@@ -23,6 +23,7 @@
     'depends': [
         'account',
         'account_edi_ubl_cii',
+        'l10n_ae',
     ],
     # saxonche powers PINT AE schematron validation (services/
     # schematron_validator.py). It is soft-imported — the module still
@@ -33,9 +34,9 @@
     'external_dependencies': {
         'python': ['saxonche'],
     },
-    # l10n_ae (UAE chart of accounts) is NOT a hard dependency — the addon works without
-    # it. Installing l10n_ae is strongly recommended for UAE companies as it provides the
-    # correct VAT tax groups and account structure expected by UAE e-invoicing.
+    # l10n_ae (UAE chart of accounts) is a hard dependency — tests load the 'ae'
+    # chart template, and module operations mid-test are forbidden by Odoo 19's
+    # test runner. Making it a depend ensures install before tests run.
     #
     # account_peppol uses the Odoo IAP proxy and conflicts with TCA's direct AP
     # integration. Both cannot be installed simultaneously.

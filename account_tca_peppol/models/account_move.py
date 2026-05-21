@@ -488,6 +488,7 @@ class AccountMove(models.Model):
         readonly=False,
         copy=True,
         default=False,
+        recursive=True,
         help='Tick to issue a Commercial Invoice — a document NOT subject to '
              'UAE VAT (PINT AE code 480, or 81 for credit notes). '
              'Examples: financial services, supplies outside the UAE VAT scope, '

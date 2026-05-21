@@ -201,14 +201,14 @@ class TestTcaApiSendFlow(TcaTestCase):
         self.company._set_tca_param('access_token_expires_at', str(future_expiry))
 
     def test_get_upload_url_returns_url_and_key(self):
-        """get_upload_url must return upload_url and file_key from the API response."""
+        """get_document_upload_url must return upload_url and file_key from the API response."""
         api_resp = {
             'upload_url': 'https://s3.amazonaws.com/bucket/key?signature=xyz',
             'file_key': 's3://tca-invoices/org-uuid/inv-uuid.xml',
             'expires_in': 1200,
         }
         with patch(_URLOPEN, return_value=_mock_http_response(api_resp)):
-            result = self.api.get_upload_url(self.company)
+            result = self.api.get_document_upload_url(self.company)
 
         self.assertEqual(result['upload_url'], api_resp['upload_url'])
         self.assertEqual(result['file_key'], api_resp['file_key'])
@@ -231,7 +231,7 @@ class TestTcaApiSendFlow(TcaTestCase):
         self.assertIsNone(req.get_header('Authorization'))
 
     def test_submit_invoice_payload_fields(self):
-        """submit_invoice must send all required API fields and return the response."""
+        """submit_invoice must send the required API fields and return the response."""
         api_resp = {
             'id': 'inv-uuid-001',
             'status': 1,
@@ -241,21 +241,16 @@ class TestTcaApiSendFlow(TcaTestCase):
             result = self.api.submit_invoice(
                 company=self.company,
                 name='INV/2025/00001',
-                document_location_path='s3://bucket/org/uuid/file.xml',
-                document_type=1,
-                sender_document_reference='100230400900003/INV-2025-00001',
-                trading_partner_peppol_id='0235:200000000000003',
-                trading_partner_country_code='AE',
+                invoice_number='INV-2025-00001',
+                source_file_path='s3://bucket/org/uuid/file.xml',
             )
 
         req = mock_open.call_args[0][0]
         body = json.loads(req.data.decode())
 
         self.assertEqual(body['name'], 'INV/2025/00001')
-        self.assertEqual(body['document_type'], 1)
-        self.assertEqual(body['trading_partner_peppol_id'], '0235:200000000000003')
-        self.assertEqual(body['trading_partner_country_code'], 'AE')
-        self.assertEqual(body['document_location_path'], 's3://bucket/org/uuid/file.xml')
+        self.assertEqual(body['invoice_number'], 'INV-2025-00001')
+        self.assertEqual(body['source_file_path'], 's3://bucket/org/uuid/file.xml')
         self.assertIn('/api/v1/invoices/', req.full_url)
         self.assertEqual(result['id'], 'inv-uuid-001')
 
@@ -276,11 +271,8 @@ class TestTcaApiSendFlow(TcaTestCase):
             self.api.submit_invoice(
                 company=self.company,
                 name='TEST',
-                document_location_path='s3://x',
-                document_type=1,
-                sender_document_reference='ref',
-                trading_partner_peppol_id='0235:200000000000003',
-                trading_partner_country_code='AE',
+                invoice_number='TEST-001',
+                source_file_path='s3://x',
             )
         body = json.loads(m.call_args[0][0].data.decode())
         for deprecated in ('sender_eas', 'sender_identifier', 'receiver_eas', 'receiver_identifier'):

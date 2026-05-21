@@ -424,7 +424,13 @@ class TestPintAeBtae02ExportFlag(TcaTestCase):
     def test_invalid_flags_reset_then_export_bit_applied(self):
         """Invalid flags (wrong length) reset to 00000000; export bit still applied for non-AE buyer."""
         invoice = self._make_invoice(partner=self.uk_partner)
-        invoice.tca_transaction_type_flags = 'BADVALUE'
+        # Bypass the @api.constrains validator — we simulate a corrupted DB state to
+        # verify the export-side sanitizer (in _get_profile_execution_id) is defensive.
+        self.env.cr.execute(
+            'UPDATE account_move SET tca_transaction_type_flags = %s WHERE id = %s',
+            ('BADVALUE', invoice.id),
+        )
+        invoice.invalidate_recordset(['tca_transaction_type_flags'])
         pei = self._get_pei(invoice)
         # After reset: 00000000 → export bit set → 00000001
         self.assertEqual(pei, '00000001',

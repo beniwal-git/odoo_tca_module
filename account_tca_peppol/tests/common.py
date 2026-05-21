@@ -122,9 +122,9 @@ class TcaTestCase(TransactionCase):
 
         # ── Revenue account ───────────────────────────────────────────────────
         # CoA loading creates income accounts — reuse one.
-        cls.revenue_account = cls.env['account.account'].search([
+        cls.revenue_account = cls.env['account.account'].with_company(cls.company).search([
             ('account_type', '=', 'income'),
-            ('company_id', '=', cls.company.id),
+            ('company_ids', 'in', cls.company.id),
             ('deprecated', '=', False),
         ], limit=1)
         if not cls.revenue_account:
@@ -132,7 +132,7 @@ class TcaTestCase(TransactionCase):
                 'name': 'Revenue',
                 'code': '400000',
                 'account_type': 'income',
-                'company_id': cls.company.id,
+                'company_ids': [(6, 0, [cls.company.id])],
             })
 
     # ── Helpers ───────────────────────────────────────────────────────────────

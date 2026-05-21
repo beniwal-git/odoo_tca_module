@@ -261,6 +261,7 @@ class TestPintAeXmlConstraints(TcaTestCase):
                 'tax_ids': [(6, 0, [self.tax_5.id])],
                 'account_id': self.revenue_account.id,
                 'tca_commodity_type': 'S',
+                'tca_service_accounting_code': '999999',
             })],
         })
         invoice.action_post()
@@ -298,6 +299,7 @@ class TestPintAeXmlConstraints(TcaTestCase):
                 'tax_ids': [(6, 0, [self.tax_5.id])],
                 'account_id': self.revenue_account.id,
                 'tca_commodity_type': 'S',
+                'tca_service_accounting_code': '999999',
             })],
         })
         invoice.action_post()
@@ -331,6 +333,7 @@ class TestPintAeXmlConstraints(TcaTestCase):
                 'tax_ids': [(6, 0, [self.tax_5.id])],
                 'account_id': self.revenue_account.id,
                 # tca_commodity_type intentionally omitted
+                'tca_service_accounting_code': '999999',
             })],
         })
         invoice.action_post()

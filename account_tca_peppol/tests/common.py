@@ -157,6 +157,7 @@ class TcaTestCase(TransactionCase):
                 'tax_ids': [(6, 0, [self.tax_5.id])],
                 'account_id': self.revenue_account.id,
                 'tca_commodity_type': commodity_type,
+                'tca_service_accounting_code': '999999',
             })],
         }
         # Credit notes need reason (BTAE-03) — use VD (Volume Discount, no preceding ref needed)

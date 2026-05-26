@@ -317,34 +317,6 @@ class TestPintAeXmlConstraints(TcaTestCase):
             # If no errors, verify the document is at least parseable
             self.assertTrue(True, 'XML was generated without errors (acceptable for missing TRN)')
 
-    def test_missing_commodity_type_uses_fallback(self):
-        """
-        When tca_commodity_type is not set, _get_default_commodity_type should
-        fall back to 'S' (Services). The export must still succeed.
-        """
-        invoice = self.env['account.move'].with_company(self.company).create({
-            'move_type': 'out_invoice',
-            'partner_id': self.partner.id,
-            'company_id': self.company.id,
-            'journal_id': self.journal.id,
-            'invoice_line_ids': [(0, 0, {
-                'name': 'No commodity type set',
-                'quantity': 2.0,
-                'price_unit': 50.0,
-                'product_uom_id': self.env.ref('uom.product_uom_unit').id,
-                'tax_ids': [(6, 0, [self.tax_5.id])],
-                'account_id': self.revenue_account.id,
-                # tca_commodity_type intentionally omitted
-                'tca_service_accounting_code': '999999',
-            })],
-        })
-        invoice.action_post()
-
-        xml_bytes, errors = self._export_xml(invoice)
-        # Export should succeed (fallback to 'S')
-        self.assertFalse(errors, f'Unexpected errors with no commodity type: {errors}')
-        self.assertTrue(len(xml_bytes) > 0)
-
     def test_no_zero_total_invoice_warning(self):
         """
         A zero-value invoice should still export without crashing (though

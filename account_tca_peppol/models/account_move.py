@@ -1462,19 +1462,15 @@ class AccountMove(models.Model):
                 )
                 return errs
             ct = line.tca_effective_commodity_type
-            if ct == 'G' and not line.tca_hs_code:
+            # HS Code (IBT-158) check stays — goods/both without HS Code fail
+            # TCA schematron ibr-184-ae / ibr-186-ae loudly. SAC (BTAE-17)
+            # checks (ibr-185-ae / ibr-186-ae SAC half) are intentionally
+            # not enforced here: per-product user request, we let TCA's own
+            # schematron be the gate on SAC so confirmation is not blocked.
+            if ct in ('G', 'B') and not line.tca_hs_code:
                 errs[f'pint_ae_line_hs_{line.id}'] = _(
-                    '[ibr-184-ae] Line "%s": Item type is Goods — "HS Code" (IBT-158) is mandatory.', label,
-                )
-                return errs
-            if ct == 'S' and not line.tca_service_accounting_code:
-                errs[f'pint_ae_line_sac_{line.id}'] = _(
-                    '[ibr-185-ae] Line "%s": Item type is Services — "Service Accounting Code" (BTAE-17) is mandatory.', label,
-                )
-                return errs
-            if ct == 'B' and (not line.tca_hs_code or not line.tca_service_accounting_code):
-                errs[f'pint_ae_line_both_{line.id}'] = _(
-                    '[ibr-186-ae] Line "%s": Item type is Both — both "HS Code" (IBT-158) and "Service Accounting Code" (BTAE-17) are mandatory.', label,
+                    '[ibr-184-ae] Line "%s": Item type is %s — "HS Code" (IBT-158) is mandatory.',
+                    label, 'Goods' if ct == 'G' else 'Both',
                 )
                 return errs
             has_rc = any(t.tca_tax_category == 'AE' for t in line.tax_ids)

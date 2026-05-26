@@ -133,11 +133,10 @@ class ResCompany(models.Model):
             org_info = api_service.get_org_info(self)
             self.tca_org_name = org_info.get('name', '')
             self.tca_is_active = True
-            # Seed OOS taxes for sale + purchase so users can immediately
-            # tick "Out of Scope" on an invoice without first configuring
-            # the chart of accounts. Idempotent — safe to re-run.
-            for direction in ('sale', 'purchase'):
-                self.env['account.tax']._tca_ensure_oos_tax(self, direction)
+            # Materialise the six canonical PINT AE taxes (S/E/O/AE/Z/N)
+            # × (sale + purchase) so users see exactly six entries in the
+            # invoice tax picker. Idempotent.
+            self.env['account.tax']._tca_ensure_pint_taxes(self)
         except UserError:
             self.tca_is_active = False
             self.tca_org_name = ''

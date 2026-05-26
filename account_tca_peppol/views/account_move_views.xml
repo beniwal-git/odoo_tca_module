@@ -256,6 +256,20 @@
                 <attribute name="optional">show</attribute>
             </xpath>
 
+            <!-- ── UAE compliance: restrict invoice tax picker to the six
+                 PINT AE-tagged taxes (S/E/O/AE/Z/N) when company is TCA-active.
+                 The l10n_ae per-emirate 5% taxes carry no tca_tax_category and
+                 are hidden from the picker — they remain in the DB so they
+                 don't break references on existing posted moves.
+                 Domain mirrors upstream account/views/account_move_views.xml
+                 (line list + line modal); update if upstream changes. -->
+            <xpath expr="//field[@name='invoice_line_ids']/list/field[@name='tax_ids']" position="attributes">
+                <attribute name="domain">[('type_tax_use', '=?', parent.invoice_filter_type_domain), ('company_id', 'parent_of', parent.company_id), ('country_id', '=', parent.tax_country_id)] + ([('tca_tax_category', '!=', False)] if parent.tca_company_is_active else [])</attribute>
+            </xpath>
+            <xpath expr="//field[@name='invoice_line_ids']/form//field[@name='tax_ids']" position="attributes">
+                <attribute name="domain">[('type_tax_use', '=?', parent.invoice_filter_type_domain), ('company_id', 'parent_of', parent.company_id), ('country_id', '=', parent.tax_country_id)] + ([('tca_tax_category', '!=', False)] if parent.tca_company_is_active else [])</attribute>
+            </xpath>
+
         </field>
     </record>
 

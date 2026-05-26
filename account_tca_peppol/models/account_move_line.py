@@ -51,8 +51,12 @@ class AccountMoveLine(models.Model):
     tca_service_accounting_code = fields.Char(
         string='Service Accounting Code (BTAE-17)',
         help=(
-            'BTAE-17: Service accounting code. Mandatory when BTAE-13 is S (Services) '
-            'or B (Both). Rendered as AdditionalItemIdentification with schemeID="SAC".'
+            'BTAE-17: Numeric service classification code. Optional at confirm '
+            'time; TCA\'s server schematron (ibr-185-ae / ibr-186-ae) may '
+            'require it when the line is Services or Both. Common sources: '
+            'UN CPC (5 digits, e.g. 84111), India GST SAC (6 digits, e.g. '
+            '998311), or your own internal scheme. Rendered as '
+            'AdditionalItemIdentification with schemeID="SAC".'
         ),
     )
     tca_lot_number = fields.Char(
@@ -156,15 +160,18 @@ class AccountMoveLine(models.Model):
 
     def _get_default_commodity_type(self):
         """
-        Infer commodity type from the product if tca_commodity_type is not set.
-        Falls back to 'S' (Services) — the safer default for B2B.
-        Kept as a small helper for tests and for callers that need the
-        product-derived value without considering the user override.
+        Infer commodity type from the product when `tca_commodity_type` is not
+        set. Only explicit service products are mapped to 'S'; everything else
+        — storable products and free-text lines — defaults to 'G' (Goods).
+        Rationale: Odoo's product.type itself defaults to 'consu' (Goods), and
+        the vast majority of B2B invoice lines are goods. Defaulting to 'S'
+        forced every line through the SAC-mandatory branch (ibr-185-ae).
+        Users can still override via the "Commodity (UAE)" column.
         """
         self.ensure_one()
-        if self.product_id and self.product_id.type == 'consu':
-            return 'G'
-        return 'S'
+        if self.product_id and self.product_id.type == 'service':
+            return 'S'
+        return 'G'
 
     # ── Format constraints ────────────────────────────────────────────────────
 

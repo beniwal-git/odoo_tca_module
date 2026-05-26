@@ -46,15 +46,14 @@ from odoo.addons.account_tca_peppol.constants import (
 
 _logger = logging.getLogger(__name__)
 
-# UAE VAT categories used by the mandate
+# UAE VAT categories used by the mandate — only these six are permitted.
 UAE_VAT_CATEGORIES = {
-    'S': 5.0,    # Standard Rate 5%
-    'Z': 0.0,    # Zero Rated
-    'E': 0.0,    # Exempt
-    'O': None,   # Out of scope / Not subject to VAT
-    'AE': 5.0,   # Reverse Charge (VAT accounted by buyer)
-    'G': 0.0,    # Free export (Zero-rated, export)
-    'K': 0.0,    # Intra-community supply (not used in UAE but included for completeness)
+    'S':  5.0,    # Standard Rate 5%
+    'E':  0.0,    # Exempt from tax
+    'O':  None,   # Services outside scope / Not subject to VAT
+    'AE': 5.0,    # VAT Reverse Charge (VAT accounted by buyer)
+    'Z':  0.0,    # Zero Rated
+    'N':  5.0,    # Standard Rate Additional VAT (extra base not in document totals)
 }
 
 
@@ -383,7 +382,7 @@ class AccountEdiXmlUBLPintAe(models.AbstractModel):
 
     def _get_tax_category_code(self, customer, supplier, tax):
         # EXTENDS account.edi.common — prefer the UAE VAT category
-        # (S / Z / E / O / AE) set on the tax over Odoo's EU-centric default.
+        # (S / E / O / AE / Z / N) set on the tax over Odoo's EU-centric default.
         if tax and tax.tca_tax_category:
             return tax.tca_tax_category
         return super()._get_tax_category_code(customer, supplier, tax)

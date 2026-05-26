@@ -136,6 +136,31 @@ class AccountMove(models.Model):
         store=False,
     )
 
+    # ── Currency lock — AED only for TCA outbound ─────────────────────────────
+    # UAE PINT AE mandate: customer invoices/credit-notes issued by a
+    # TCA-active company are denominated in AED. No foreign-currency support
+    # (no BTAE-20 second-TaxTotal-in-AED handling); journal/company currency
+    # may be anything, we override on the move. Inbound vendor bills are
+    # untouched — they arrive in whatever currency the sender used.
+    #
+    # Enforcement layers:
+    #   1. Compute below — sets AED on create / journal change / TCA toggle.
+    #   2. View readonly (account_move_views.xml) — locks the field on form.
+    #   3. _tca_check_document() — hard-fails _post if currency drifted.
+    #
+    # The @api.depends here REPLACES the parent's; redeclare upstream's
+    # ('journal_id', 'statement_line_id') so super's logic still re-fires on
+    # journal change for non-TCA / inbound moves.
+    @api.depends('journal_id', 'statement_line_id',
+                 'move_type', 'company_id.tca_is_active')
+    def _compute_currency_id(self):
+        super()._compute_currency_id()
+        aed = self.env.ref('base.AED')
+        for move in self:
+            if (move.company_id.tca_is_active
+                    and move.move_type in ('out_invoice', 'out_refund')):
+                move.currency_id = aed
+
     # ── Inbound accept/reject ──────────────────────────────────────────────────
 
     tca_inbound_status = fields.Selection(
@@ -555,7 +580,8 @@ class AccountMove(models.Model):
         # ── (2) Strip forbidden taxes ────────────────────────────────────────
         def _is_forbidden_for_oos(tax):
             cat = (tax.tca_tax_category or '')
-            if cat in ('S', 'AE'):
+            # S/AE/N are all standard-rated variants → forbidden on OOS.
+            if cat in ('S', 'AE', 'N'):
                 return True
             return tax.amount_type == 'percent' and tax.amount != 0.0
 
@@ -1159,8 +1185,15 @@ class AccountMove(models.Model):
             )
         if not self.invoice_date:
             errs['pint_ae_invoice_date'] = _('"Invoice Date" is required.')
-        if not self.currency_id:
-            errs['pint_ae_currency'] = _('"Currency" is required.')
+        # currency_id is required=True upstream — only worth checking the AED
+        # constraint here. Outbound only; inbound XML carries the sender's
+        # currency unchanged.
+        if (self.move_type in ('out_invoice', 'out_refund')
+                and self.currency_id.name != 'AED'):
+            errs['pint_ae_currency_aed'] = _(
+                'PINT AE invoices must be issued in AED. Current currency: %s.',
+                self.currency_id.name or '—',
+            )
         if not self.invoice_date_due and not self.invoice_payment_term_id:
             errs['pint_ae_due_date_or_term'] = _('"Due Date" or "Payment Terms" is required.')
 
@@ -1476,10 +1509,11 @@ class AccountMove(models.Model):
 
         for line in product_lines:
             for tax in line.tax_ids:
-                if tax.tca_tax_category == 'S' and tax.amount != 5.0:
+                if tax.tca_tax_category in ('S', 'N') and tax.amount != 5.0:
                     errs['pint_ae_s_rate'] = _(
-                        '[ibr-190-ae] Standard rated (S) VAT must be exactly 5.00%%. '
-                        'Tax "%s" has rate %.2f%%.', tax.name, tax.amount,
+                        '[ibr-190-ae] Standard rated (%s) VAT must be exactly 5.00%%. '
+                        'Tax "%s" has rate %.2f%%.',
+                        tax.tca_tax_category, tax.name, tax.amount,
                     )
                     return errs
 

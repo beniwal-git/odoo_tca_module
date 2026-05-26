@@ -2,15 +2,14 @@
 
 from odoo import _, api, fields, models
 
-# UAE VAT category codes per PINT AE / UNCL5305
+# UAE VAT category codes per PINT AE / UNCL5305 — UAE mandate allows only these six.
 UAE_TAX_CATEGORY_SELECTION = [
     ('S',  'S — Standard Rate (5%)'),
+    ('E',  'E — Exempt from Tax'),
+    ('O',  'O — Services Outside Scope / Not Subject to Tax'),
+    ('AE', 'AE — VAT Reverse Charge'),
     ('Z',  'Z — Zero Rated'),
-    ('E',  'E — Exempt'),
-    ('AE', 'AE — Reverse Charge'),
-    ('G',  'G — Free Export / Zero-Rated Export'),
-    ('O',  'O — Not Subject to VAT (Out of Scope)'),
-    ('K',  'K — Intra-Community Supply'),
+    ('N',  'N — Standard Rate Additional VAT'),
 ]
 
 
@@ -34,8 +33,8 @@ class AccountTax(models.Model):
         help=(
             'PINT AE: VAT category code for this tax per UNCL5305 / UAE mandate.\n'
             'When set, overrides Odoo\'s auto-detected category in PINT AE XML.\n'
-            'S = Standard (5%), Z = Zero-Rated, E = Exempt, AE = Reverse Charge,\n'
-            'G = Export/Free, O = Out of Scope, K = Intra-Community.'
+            'S = Standard (5%), E = Exempt, O = Out of Scope, AE = Reverse Charge,\n'
+            'Z = Zero-Rated, N = Standard Rate Additional VAT.'
         ),
     )
 
@@ -45,7 +44,7 @@ class AccountTax(models.Model):
         help=(
             'PINT AE IBT-121: Code from the AE-Exempt code list explaining why '
             'this tax is exempt or zero-rated (e.g. "VATEX-AE-SPEC").\n'
-            'Mandatory when tca_tax_category is Z, E, or G.\n'
+            'Mandatory when tca_tax_category is Z or E.\n'
             'Leave blank to use the Odoo default (EU codes — not valid for UAE).'
         ),
     )

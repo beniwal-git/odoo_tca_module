@@ -68,6 +68,17 @@
                 <field name="tca_company_is_active" invisible="1"/>
             </xpath>
 
+            <!-- ── UAE compliance: lock invoice currency to AED on outbound.
+                 PINT AE mandate denominates customer invoices/credit-notes in
+                 AED. _compute_currency_id in models/account_move.py forces the
+                 value; this readonly attribute prevents the user from changing
+                 it on the form. Inbound vendor bills keep their sender-supplied
+                 currency. The currency-rate widget alongside is still useful
+                 when the company currency isn't AED. -->
+            <xpath expr="//div[@name='currency_div']//field[@name='currency_id'][1]" position="attributes">
+                <attribute name="readonly">state != 'draft' or (tca_company_is_active and move_type in ('out_invoice', 'out_refund'))</attribute>
+            </xpath>
+
             <!-- ── Inbound status banner ───────────────────────────────── -->
             <xpath expr="//div[hasclass('oe_title')]" position="after">
                 <div invisible="not tca_is_inbound" class="alert alert-info mb-0" role="alert">
@@ -237,6 +248,12 @@
                 <field name="tca_service_accounting_code" optional="hide" string="SAC"/>
                 <field name="tca_standard_item_id" optional="hide" string="GTIN / Standard ID"/>
                 <field name="tca_rc_description" optional="hide" string="RC Description"/>
+            </xpath>
+
+            <!-- PINT AE requires Unit of Measure (IBT-130) on every line.
+                 Upstream hides product_uom_id by default — force-show it. -->
+            <xpath expr="//field[@name='invoice_line_ids']/list/field[@name='product_uom_id']" position="attributes">
+                <attribute name="optional">show</attribute>
             </xpath>
 
         </field>

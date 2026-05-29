@@ -261,13 +261,24 @@ class AccountMove(models.Model):
     @api.depends(
         'partner_id', 'partner_id.peppol_endpoint', 'partner_id.country_id',
         'tca_transaction_type_flags',
+        'journal_id.is_self_billing',
+        'company_id', 'company_id.partner_id.peppol_endpoint',
     )
     def _compute_tca_buyer_participant_id(self):
         """
         Auto-populate Buyer Participant ID per BIS 1.5.3. The compute
-        re-evaluates when flags or partner change ONLY if the current value
-        is a predefined/legacy endpoint (i.e. it was auto-set, not user-set).
-        Custom values entered by the user are preserved.
+        re-evaluates when flags or party data change ONLY if the current
+        value is a predefined/legacy endpoint (i.e. it was auto-set, not
+        user-set). Custom values entered by the user are preserved.
+
+        Party resolution:
+          · Outbound out_invoice / out_refund   → buyer = customer (partner_id)
+          · Self-bill in_invoice / in_refund    → buyer = our company
+            (we are the actual buyer; the vendor sits in the supplier slot
+            after the BIS3 self-billing swap)
+          · Plain vendor bills                  → buyer = customer (legacy;
+            these aren't TCA-eligible for outbound but the field is kept
+            consistent)
 
         Actual routing logic lives in _tca_resolve_buyer_participant_id —
         shared with the @api.onchange so the rules cannot drift.
@@ -277,9 +288,12 @@ class AccountMove(models.Model):
             # Preserve user-set values (anything not in the auto-set predefined set).
             if current and current not in ANON_BUYER_PIDS:
                 continue
-            partner = move.partner_id.commercial_partner_id
+            if move.tca_is_self_billing:
+                buyer = move.company_id.partner_id.commercial_partner_id
+            else:
+                buyer = move.partner_id.commercial_partner_id
             move.tca_buyer_participant_id = self._tca_resolve_buyer_participant_id(
-                partner, move.tca_transaction_type_flags,
+                buyer, move.tca_transaction_type_flags,
             )
 
     # ── PINT AE XML fields ────────────────────────────────────────────────────
@@ -907,9 +921,14 @@ class AccountMove(models.Model):
             pid = (move.tca_buyer_participant_id or '').strip()
             if not pid or pid in ANON_BUYER_PIDS:
                 continue
-            partner = move.partner_id.commercial_partner_id
-            # Only enforce UAE format when buyer is in UAE
-            if not (partner._tca_is_uae_party()):
+            # For self-bills the buyer is our company (vendor is supplier
+            # after the XML swap); enforce against that party's country.
+            buyer = (
+                move.company_id.partner_id.commercial_partner_id
+                if move.tca_is_self_billing
+                else move.partner_id.commercial_partner_id
+            )
+            if not buyer._tca_is_uae_party():
                 continue
             if not re_uae_format.match(pid):
                 raise ValidationError(_(
@@ -1071,11 +1090,18 @@ class AccountMove(models.Model):
 
         # ── Buyer Participant ID (BIS 1.5.3 routing) ──────────────────────────
         # Same routing as the compute — both delegate to the shared helper
-        # so the rules live in one place and cannot drift apart.
+        # so the rules live in one place and cannot drift apart. For
+        # self-bills the buyer is OUR company (vendor is supplier after the
+        # XML swap); resolve against company.partner_id in that case.
+        buyer_party = (
+            self.company_id.partner_id.commercial_partner_id
+            if self.tca_is_self_billing
+            else partner
+        )
         current_pid = (self.tca_buyer_participant_id or '').strip()
         if not current_pid or current_pid in ANON_BUYER_PIDS:
             resolved = self._tca_resolve_buyer_participant_id(
-                partner, self.tca_transaction_type_flags,
+                buyer_party, self.tca_transaction_type_flags,
             )
             # Preserve a previously-set non-empty value if the helper returns ''
             # (e.g. partner has no country yet — common during draft creation).
@@ -1122,28 +1148,32 @@ class AccountMove(models.Model):
 
         Eligible when:
           - the company has TCA integration active
-          - the partner has the PINT AE EDI format (ubl_pint_ae)
           - the move is posted and not yet TCA-accepted
           - the move was NOT received via TCA inbound
           - AND one of:
-              · move_type is outbound (out_invoice / out_refund), OR
-              · the move is a self-bill (in_invoice / in_refund on a
-                self-billing journal — buyer issues for supplier).
+              · OUTBOUND: move_type is out_invoice/out_refund AND the
+                customer partner has the PINT AE EDI format set
+                (`invoice_edi_format == 'ubl_pint_ae'`). The format flag
+                signals the customer is reachable on PINT AE.
+              · SELF-BILL: move_type is in_invoice/in_refund on a
+                self-billing journal. No format requirement on the vendor
+                — they may be outside UAE / off the Peppol network; the
+                buyer issues to TCA on their behalf regardless.
 
-        The last clause is what gates plain vendor bills out of the
-        outbound queue while letting self-bills through.
+        The outbound vs self-bill split exists because plain vendor bills
+        (in_* on a regular journal) must NOT be queued for TCA outbound.
         """
         self.ensure_one()
+        if not (self.company_id.tca_is_active
+                and self.state == 'posted'
+                and not self.tca_is_inbound
+                and self.tca_move_state in ('not_sent', 'error', 'rejected')):
+            return False
+        if self.tca_is_self_billing:
+            return True
         return (
-            self.company_id.tca_is_active
-            and self.state == 'posted'
-            and not self.tca_is_inbound
+            self.move_type in ('out_invoice', 'out_refund')
             and self.partner_id.commercial_partner_id.invoice_edi_format == 'ubl_pint_ae'
-            and self.tca_move_state in ('not_sent', 'error', 'rejected')
-            and (
-                self.move_type in ('out_invoice', 'out_refund')
-                or self.tca_is_self_billing
-            )
         )
 
     # ──────────────────────────────────────────────────────────────────────────
@@ -1417,12 +1447,13 @@ class AccountMove(models.Model):
             errs['pint_ae_customer_country'] = _(
                 'Customer "%s" is missing a "Country" (IBT-055).', customer.name,
             )
-        if not getattr(customer, 'peppol_eas', None) or not getattr(customer, 'peppol_endpoint', None):
-            errs['pint_ae_customer_peppol'] = _(
-                'Customer "%s" is missing "Peppol EAS" and/or "Peppol Endpoint" (IBT-049). '
-                'Open the customer record → "Accounting" tab.',
-                customer.name,
-            )
+        # Participant-ID enforcement lives on the MOVE field
+        # (`tca_buyer_participant_id`, validated in _tca_check_document).
+        # The partner's peppol_eas/peppol_endpoint are inputs to that compute;
+        # when missing the user fills the predefined govt fallback (97/98/99)
+        # directly on the invoice form. We deliberately do not gate confirm
+        # on partner.peppol_endpoint so self-bills with off-network foreign
+        # vendors and customers without Peppol routing can both proceed.
 
         buyer_pid = (self.tca_buyer_participant_id or '').strip()
         buyer_is_anonymous = buyer_pid in ANON_BUYER_PIDS

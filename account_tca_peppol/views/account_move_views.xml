@@ -19,6 +19,7 @@
                 <field name="tca_show_credit_note_fields" invisible="1"/>
                 <field name="tca_is_export" invisible="1"/>
                 <field name="tca_buyer_is_uae" invisible="1"/>
+                <field name="tca_is_self_billing" invisible="1"/>
 
                 <!-- Retry button: outbound error/rejected only -->
                 <button name="action_tca_resend"
@@ -58,11 +59,14 @@
                         data-hotkey="shift+r"/>
             </xpath>
 
-            <!-- ── UAE compliance: hide native "Credit Note" button on vendor bills.
-                 Per UAE FTA law, only the seller can issue a credit note. The
-                 buyer cannot create a credit note against a received vendor bill. -->
+            <!-- ── UAE compliance: hide native "Credit Note" button on plain
+                 vendor bills. Per UAE FTA law, only the seller can issue a
+                 credit note — the buyer cannot reverse a received vendor bill.
+                 Exception: self-billed vendor bills (the buyer IS the issuer
+                 on the supplier's behalf, UC4/UC5) keep the button so the
+                 user can issue a self-billing credit note (381_sb). -->
             <xpath expr="//button[@name='action_reverse']" position="attributes">
-                <attribute name="invisible">move_type not in ('out_invoice', 'in_invoice') or state != 'posted' or (tca_company_is_active and move_type == 'in_invoice')</attribute>
+                <attribute name="invisible">move_type not in ('out_invoice', 'in_invoice') or state != 'posted' or (tca_company_is_active and move_type == 'in_invoice' and not tca_is_self_billing)</attribute>
             </xpath>
             <xpath expr="//div[@name='button_box']" position="inside">
                 <field name="tca_company_is_active" invisible="1"/>
@@ -76,7 +80,7 @@
                  currency. The currency-rate widget alongside is still useful
                  when the company currency isn't AED. -->
             <xpath expr="//div[@name='currency_div']//field[@name='currency_id'][1]" position="attributes">
-                <attribute name="readonly">state != 'draft' or (tca_company_is_active and move_type in ('out_invoice', 'out_refund'))</attribute>
+                <attribute name="readonly">state != 'draft' or (tca_company_is_active and (move_type in ('out_invoice', 'out_refund') or tca_is_self_billing))</attribute>
             </xpath>
 
             <!-- ── Inbound status banner ───────────────────────────────── -->

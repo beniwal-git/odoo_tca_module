@@ -136,12 +136,16 @@ class AccountMove(models.Model):
         store=False,
     )
 
-    # ── Currency lock — AED only for TCA outbound ─────────────────────────────
-    # UAE PINT AE mandate: customer invoices/credit-notes issued by a
-    # TCA-active company are denominated in AED. No foreign-currency support
-    # (no BTAE-20 second-TaxTotal-in-AED handling); journal/company currency
-    # may be anything, we override on the move. Inbound vendor bills are
-    # untouched — they arrive in whatever currency the sender used.
+    # ── Currency lock — AED only for TCA-issued documents ────────────────────
+    # UAE PINT AE mandate: every PINT AE document we ISSUE is denominated in
+    # AED. No foreign-currency support (no BTAE-20 second-TaxTotal-in-AED
+    # handling); the journal/company currency may be anything — we override
+    # it on the move. Two cases qualify as "we issue":
+    #   · out_invoice / out_refund (our customer invoices/credit notes)
+    #   · in_invoice / in_refund on a self-billing journal (we issue on
+    #     the supplier's behalf — UC4/UC5).
+    # Plain vendor bills (in_*) on non-self-billing journals are untouched —
+    # they're inbound from the supplier in the supplier's currency.
     #
     # Enforcement layers:
     #   1. Compute below — sets AED on create / journal change / TCA toggle.
@@ -150,15 +154,21 @@ class AccountMove(models.Model):
     #
     # The @api.depends here REPLACES the parent's; redeclare upstream's
     # ('journal_id', 'statement_line_id') so super's logic still re-fires on
-    # journal change for non-TCA / inbound moves.
-    @api.depends('journal_id', 'statement_line_id',
+    # journal change for non-TCA moves.
+    @api.depends('journal_id', 'statement_line_id', 'journal_id.is_self_billing',
                  'move_type', 'company_id.tca_is_active')
     def _compute_currency_id(self):
         super()._compute_currency_id()
         aed = self.env.ref('base.AED')
         for move in self:
-            if (move.company_id.tca_is_active
-                    and move.move_type in ('out_invoice', 'out_refund')):
+            if not move.company_id.tca_is_active:
+                continue
+            is_issued_by_us = (
+                move.move_type in ('out_invoice', 'out_refund')
+                or (move.move_type in ('in_invoice', 'in_refund')
+                    and move.journal_id.is_self_billing)
+            )
+            if is_issued_by_us:
                 move.currency_id = aed
 
     # ── Inbound accept/reject ──────────────────────────────────────────────────
@@ -642,37 +652,50 @@ class AccountMove(models.Model):
         compute='_compute_tca_type_visibility', store=False,
     )
 
-    @api.depends('move_type', 'tca_is_out_of_scope')
+    @api.depends('move_type', 'tca_is_out_of_scope',
+                 'journal_id', 'journal_id.is_self_billing')
     def _compute_tca_invoice_type_code(self):
         """
-        Resolve the PINT AE document type code from the move's direction plus
-        the user-facing OOS toggle:
+        Resolve the PINT AE document type code from move direction, the OOS
+        toggle, and the journal's `is_self_billing` flag:
 
-            (out_invoice / in_invoice, not OOS) → '380'  Tax Invoice
-            (out_invoice / in_invoice,     OOS) → '480'  Commercial Invoice (OOS)
-            (out_refund  / in_refund,  not OOS) → '381'  Tax Credit Note
-            (out_refund  / in_refund,      OOS) → '81'   OOS Credit Note
+            (out_invoice / in_invoice, regular)        → '380'    Tax Invoice
+            (out_invoice / in_invoice, OOS)            → '480'    Commercial Invoice (OOS)
+            (out_refund  / in_refund,  regular)        → '381'    Tax Credit Note
+            (out_refund  / in_refund,  OOS)            → '81'     OOS Credit Note
+            (in_invoice on self-billing journal)       → '380_sb' Self-Billing Tax Invoice
+            (in_refund  on self-billing journal)       → '381_sb' Self-Billing Tax Credit Note
 
-        Self-billing variants ('380_sb', '381_sb') aren't user-exposed and are
-        preserved if already set (set via dev mode / data import / future UI).
+        Self-billing applies only to inbound move types — the buyer issues
+        the document on the supplier's behalf. The Odoo move stays
+        `in_invoice` / `in_refund`; the XML builder swaps supplier ↔ customer
+        when emitting (handled upstream in account_edi_xml_ubl_bis3).
 
-        Inbound moves are not touched — their type code is set by the XML
-        importer from the actual `<cbc:InvoiceTypeCode>` / `<CreditNoteTypeCode>`
-        carried in the received document, and the OOS classification is a
-        property of the seller's invoice, not something the buyer can flip.
+        OOS × self-billing is mutually exclusive in PINT AE — there is no
+        `480_sb` variant. Self-billing wins.
+
+        Inbound-received moves (tca_is_inbound=True) are not touched — the
+        XML importer is the source of truth for their type code.
         """
         for move in self:
-            # Inbound: importer is the source of truth — don't recompute.
+            # Inbound-received: importer is the source of truth.
             if move.tca_is_inbound:
                 continue
-            # Preserve self-billing variants (no _sb checkbox UI yet).
-            if move.tca_invoice_type_code in ('380_sb', '381_sb'):
-                continue
 
+            is_self_bill = (
+                move.move_type in ('in_invoice', 'in_refund')
+                and move.journal_id.is_self_billing
+            )
             if move.move_type in ('out_invoice', 'in_invoice'):
-                move.tca_invoice_type_code = '480' if move.tca_is_out_of_scope else '380'
+                if is_self_bill:
+                    move.tca_invoice_type_code = '380_sb'
+                else:
+                    move.tca_invoice_type_code = '480' if move.tca_is_out_of_scope else '380'
             elif move.move_type in ('out_refund', 'in_refund'):
-                move.tca_invoice_type_code = '81' if move.tca_is_out_of_scope else '381'
+                if is_self_bill:
+                    move.tca_invoice_type_code = '381_sb'
+                else:
+                    move.tca_invoice_type_code = '81' if move.tca_is_out_of_scope else '381'
             else:
                 move.tca_invoice_type_code = False
 
@@ -1096,11 +1119,19 @@ class AccountMove(models.Model):
     def _tca_is_send_eligible(self):
         """
         Returns True if this invoice can be submitted (or resubmitted) to TCA.
-        An invoice is eligible when:
+
+        Eligible when:
           - the company has TCA integration active
-          - the partner is configured with a PINT AE format (ubl_pint_ae)
-          - the invoice is in 'posted' state
-          - the move is outbound (not a vendor bill received via TCA)
+          - the partner has the PINT AE EDI format (ubl_pint_ae)
+          - the move is posted and not yet TCA-accepted
+          - the move was NOT received via TCA inbound
+          - AND one of:
+              · move_type is outbound (out_invoice / out_refund), OR
+              · the move is a self-bill (in_invoice / in_refund on a
+                self-billing journal — buyer issues for supplier).
+
+        The last clause is what gates plain vendor bills out of the
+        outbound queue while letting self-bills through.
         """
         self.ensure_one()
         return (
@@ -1109,6 +1140,10 @@ class AccountMove(models.Model):
             and not self.tca_is_inbound
             and self.partner_id.commercial_partner_id.invoice_edi_format == 'ubl_pint_ae'
             and self.tca_move_state in ('not_sent', 'error', 'rejected')
+            and (
+                self.move_type in ('out_invoice', 'out_refund')
+                or self.tca_is_self_billing
+            )
         )
 
     # ──────────────────────────────────────────────────────────────────────────
@@ -1186,10 +1221,14 @@ class AccountMove(models.Model):
         if not self.invoice_date:
             errs['pint_ae_invoice_date'] = _('"Invoice Date" is required.')
         # currency_id is required=True upstream — only worth checking the AED
-        # constraint here. Outbound only; inbound XML carries the sender's
-        # currency unchanged.
-        if (self.move_type in ('out_invoice', 'out_refund')
-                and self.currency_id.name != 'AED'):
+        # constraint here. Applies to any TCA-issued document: outbound
+        # invoices/credit-notes plus self-bills (in_* on a self-billing
+        # journal). Plain vendor bills carry the supplier's currency.
+        is_issued_by_us = (
+            self.move_type in ('out_invoice', 'out_refund')
+            or self.tca_is_self_billing
+        )
+        if is_issued_by_us and self.currency_id.name != 'AED':
             errs['pint_ae_currency_aed'] = _(
                 'PINT AE invoices must be issued in AED. Current currency: %s.',
                 self.currency_id.name or '—',

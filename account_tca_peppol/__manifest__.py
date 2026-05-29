@@ -1,12 +1,12 @@
 # Part of TCA. See LICENSE file for full copyright and licensing details.
 
 {
-    'name': 'TCA Peppol E-Invoicing (UAE PINT AE)',
+    'name': 'Suntech - TCA E-Invoicing (UAE)',
     'version': '19.0.1.0.0',
     'category': 'Accounting/Accounting',
     'summary': 'UAE PINT AE e-invoicing via TCA Access Point',
     'description': """
-        Integrates Odoo with the TCA (The Connect Arabia) Peppol Access Point.
+        Integrates Odoo with the TCA (Tax Compliance Agent) Peppol Access Point.
         Replaces Odoo's native account_peppol module for UAE businesses.
 
         Features:
@@ -18,7 +18,7 @@
         - Multi-company support
         - Odoo 19 compatible
     """,
-    'author': 'TCA - The Connect Arabia',
+    'author': 'Suntech - Tax Compliance Agent',
     'website': 'https://taxcomplianceagent.com/',
     'depends': [
         'account',

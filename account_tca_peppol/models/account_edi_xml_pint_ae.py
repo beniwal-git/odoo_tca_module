@@ -42,6 +42,7 @@ from odoo.addons.account_tca_peppol.constants import (
     PINT_AE_PROFILE_ID,
     PINT_AE_SELFBILLING_CUSTOMIZATION_ID,
     PINT_AE_SELFBILLING_PROFILE_ID,
+    UAE_EAS,
 )
 
 _logger = logging.getLogger(__name__)
@@ -299,22 +300,23 @@ class AccountEdiXmlUBLPintAe(models.AbstractModel):
             }
 
     def _ubl_add_invoice_type_code_node(self, vals):
-        # EXTENDS account.edi.xml.ubl_bis3 — IBT-003: emit the UNCL1001 code
-        # from tca_uncl1001_code (380 standard / 480 out-of-scope).
+        # EXTENDS account.edi.xml.ubl_bis3 — IBT-003: emit the stored UNCL1001
+        # code (380 / 389 / 480).
         super()._ubl_add_invoice_type_code_node(vals)
         if vals['document_type'] != 'invoice':
             return
-        code = vals['invoice'].tca_uncl1001_code or '380'
+        code = vals['invoice'].tca_invoice_type_code or '380'
         vals['document_node']['cbc:InvoiceTypeCode']['_text'] = (
             int(code) if code.isdigit() else code
         )
 
     def _ubl_add_credit_note_type_code_node(self, vals):
-        # EXTENDS account.edi.xml.ubl_bis3 — IBT-003: 381 standard / 81 OOS.
+        # EXTENDS account.edi.xml.ubl_bis3 — IBT-003: emit the stored UNCL1001
+        # code (381 / 261 / 81).
         super()._ubl_add_credit_note_type_code_node(vals)
         if vals['document_type'] != 'credit_note':
             return
-        code = vals['invoice'].tca_uncl1001_code or '381'
+        code = vals['invoice'].tca_invoice_type_code or '381'
         vals['document_node']['cbc:CreditNoteTypeCode']['_text'] = (
             int(code) if code.isdigit() else code
         )
@@ -452,6 +454,38 @@ class AccountEdiXmlUBLPintAe(models.AbstractModel):
             document_node['cac:PaymentMeans'] = []
             return
         super()._add_invoice_payment_means_nodes(document_node, vals)
+
+    def _get_party_node(self, vals):
+        # EXTENDS account.edi.xml.ubl_20 — when the move carries an explicit
+        # move-level participant ID override for this party slot, emit it
+        # into cbc:EndpointID instead of the partner-record value.
+        #
+        # Role semantics after the upstream BIS3 self-billing swap:
+        #   · role='supplier'  → tca_seller_participant_id (issuer of the
+        #                         document in real-world terms)
+        #   · role='customer'  → tca_buyer_participant_id (receiver)
+        #
+        # The schemeID defaults to the UAE EAS (0235) when overriding —
+        # PINT AE's predefined endpoints (97/98/99) and 10-digit UAE
+        # participant IDs both use this scheme.
+        node = super()._get_party_node(vals)
+        invoice = vals.get('invoice')
+        role = vals.get('role')
+        if not invoice or role not in ('supplier', 'customer'):
+            return node
+        override = (
+            invoice.tca_seller_participant_id if role == 'supplier'
+            else invoice.tca_buyer_participant_id
+        )
+        override = (override or '').strip()
+        if not override:
+            return node
+        endpoint_node = node.get('cbc:EndpointID') or {}
+        endpoint_node['_text'] = override
+        if not endpoint_node.get('schemeID'):
+            endpoint_node['schemeID'] = UAE_EAS
+        node['cbc:EndpointID'] = endpoint_node
+        return node
 
     def _add_invoice_seller_supplier_party_nodes(self, document_node, vals):
         # EXTENDS account.edi.xml.ubl_20 — BTAE-14: disclosed-agent principal
@@ -785,7 +819,7 @@ class AccountEdiXmlUBLPintAe(models.AbstractModel):
     _BILLING_FREQ_KEYS = {
         'DLY', 'WKY', 'Q15', 'MTH', 'Q45', 'Q60', 'QTR', 'YRL', 'HYR', 'OTH',
     }
-    _INVOICE_TYPE_KEYS = {'380', '381', '480', '81'}
+    _INVOICE_TYPE_KEYS = {'380', '381', '389', '261', '480', '81'}
 
     def _import_fill_invoice(self, invoice, tree, qty_factor):
         """
@@ -807,27 +841,15 @@ class AccountEdiXmlUBLPintAe(models.AbstractModel):
         # is preserved in the attached XML file.
 
         # ── IBT-003: InvoiceTypeCode / CreditNoteTypeCode → type code ────
-        # Detect self-billing variant from CustomizationID/ProfileID — the
-        # XML still carries 380/381 in the type code element but the profile
-        # tells us it's self-billed (UC4/UC5).
-        is_selfbilling = False
-        for tag in ('CustomizationID', 'ProfileID'):
-            n = tree.find(f'./{{*}}{tag}')
-            if n is not None and n.text and 'selfbilling' in n.text.lower():
-                is_selfbilling = True
-                break
-
+        # PINT AE supports six UNCL1001 codes; self-billing uses 389/261.
+        # We copy the parsed value through if it's in the allowed set.
         node = tree.find('./{*}InvoiceTypeCode')
         if node is None:
             node = tree.find('./{*}CreditNoteTypeCode')
         if node is not None and node.text:
             val = node.text.strip()
             if val in self._INVOICE_TYPE_KEYS:
-                # Self-billing applies only to the in-scope codes (380/381)
-                if is_selfbilling and val in ('380', '381'):
-                    invoice.tca_invoice_type_code = f'{val}_sb'
-                else:
-                    invoice.tca_invoice_type_code = val
+                invoice.tca_invoice_type_code = val
             else:
                 _logger.warning(
                     'PINT AE import: unrecognised invoice type code "%s" on %s',

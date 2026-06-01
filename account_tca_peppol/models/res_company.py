@@ -1,7 +1,11 @@
 # Part of TCA. See LICENSE file for full copyright and licensing details.
 
+import logging
+
 from odoo import _, fields, models
 from odoo.exceptions import UserError
+
+_logger = logging.getLogger(__name__)
 
 
 class ResCompany(models.Model):
@@ -11,6 +15,39 @@ class ResCompany(models.Model):
     Credentials are stored per-company via ir.config_parameter.
     """
     _inherit = 'res.company'
+
+    def _register_hook(self):
+        """Ensure every TCA-active company has the six canonical PINT AE
+        taxes (S/E/O/AE/Z/N × sale + purchase). Runs once per registry
+        build (= once per server start). Idempotent — the bootstrap keys
+        on (company, type_tax_use, tca_tax_category), so existing rows
+        are reused and not duplicated.
+
+        We do this in `_register_hook` rather than relying solely on the
+        module version-bump migration mechanism because the latter only
+        fires when the manifest version is strictly higher than the DB
+        version. In a dev workflow with repeated `-u` against the same
+        version, the migration silently never runs. `_register_hook` is
+        the only reliable "always fires" hook between install and runtime.
+        """
+        super()._register_hook()
+        try:
+            companies = self.sudo().search([('tca_is_active', '=', True)])
+            if not companies:
+                return
+            AccountTax = self.env['account.tax']
+            for company in companies:
+                AccountTax._tca_ensure_pint_taxes(company)
+            # Cosmetic: rewrite the `0%%` literal left by an earlier version
+            # of the OOS-tax helper. Cheap — runs once per server start over
+            # a small recordset (account.tax for active companies only).
+            company_ids = companies.ids
+            for tax in AccountTax.sudo().search([('company_id', 'in', company_ids)]):
+                if tax.name and '0%%' in tax.name:
+                    tax.name = tax.name.replace('0%%', '0%')
+        except Exception:
+            # Never let bootstrap break server startup.
+            _logger.exception('TCA: PINT AE tax bootstrap failed in _register_hook')
 
     # ── TCA connection settings ────────────────────────────────────────────────
 

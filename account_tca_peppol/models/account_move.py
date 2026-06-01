@@ -213,6 +213,24 @@ class AccountMove(models.Model):
             'Auto-populated from the customer record + transaction flags; editable per invoice.'
         ),
     )
+    tca_seller_participant_id = fields.Char(
+        string='Seller Participant ID',
+        copy=True,
+        compute='_compute_tca_seller_participant_id',
+        store=True,
+        readonly=False,
+        help=(
+            'Peppol Participant ID of the seller (issuer of this invoice in '
+            'real-world terms).\n'
+            'For outbound customer invoices: auto-populated from your company\'s '
+            'Peppol Endpoint.\n'
+            'For self-bills (in_* on a self-billing journal): auto-populated '
+            'from the vendor\'s Peppol Endpoint. If the vendor has no Peppol '
+            'routing (off-network foreign supplier), enter a 10-digit '
+            'fallback identifier manually.\n'
+            'Editable per invoice — overrides the partner-level value.'
+        ),
+    )
 
     @api.model
     def _tca_resolve_buyer_participant_id(self, partner, flags):
@@ -288,13 +306,55 @@ class AccountMove(models.Model):
             # Preserve user-set values (anything not in the auto-set predefined set).
             if current and current not in ANON_BUYER_PIDS:
                 continue
-            if move.tca_is_self_billing:
+            # Inline the self-bill check rather than read move.tca_is_self_billing
+            # — another compute may not have run yet under the same trigger.
+            is_self_bill = (
+                move.move_type in ('in_invoice', 'in_refund')
+                and move.journal_id.is_self_billing
+            )
+            if is_self_bill:
                 buyer = move.company_id.partner_id.commercial_partner_id
             else:
                 buyer = move.partner_id.commercial_partner_id
             move.tca_buyer_participant_id = self._tca_resolve_buyer_participant_id(
                 buyer, move.tca_transaction_type_flags,
             )
+
+    @api.depends(
+        'partner_id', 'partner_id.peppol_endpoint',
+        'journal_id.is_self_billing',
+        'company_id', 'company_id.partner_id.peppol_endpoint',
+    )
+    def _compute_tca_seller_participant_id(self):
+        """
+        Auto-populate Seller Participant ID — the participant ID that lands
+        in the AccountingSupplierParty's EndpointID in XML.
+
+        Party resolution:
+          · Outbound out_invoice / out_refund   → seller = our company
+          · Self-bill in_invoice / in_refund    → seller = vendor (partner_id)
+            (vendor sits in the supplier slot after the BIS3 swap)
+
+        Preserves user-set values (only overwrites when blank). No BIS 1.5.3
+        government-fallback routing for the seller side — supplier-side
+        predefined endpoints aren't part of the spec; if the vendor has no
+        peppol_endpoint the field stays blank and the user enters a fallback.
+        """
+        for move in self:
+            current = (move.tca_seller_participant_id or '').strip()
+            if current:
+                continue
+            # Inline the self-bill check rather than read move.tca_is_self_billing
+            # — another compute may not have run yet under the same trigger.
+            is_self_bill = (
+                move.move_type in ('in_invoice', 'in_refund')
+                and move.journal_id.is_self_billing
+            )
+            if is_self_bill:
+                seller = move.partner_id.commercial_partner_id
+            else:
+                seller = move.company_id.partner_id.commercial_partner_id
+            move.tca_seller_participant_id = seller.peppol_endpoint or ''
 
     # ── PINT AE XML fields ────────────────────────────────────────────────────
 
@@ -482,21 +542,25 @@ class AccountMove(models.Model):
         ),
     )
     # ── Invoice Type Code (6 PINT AE variants) ───────────────────────────────
-    # `_sb` suffix = self-billing (buyer issues on behalf of supplier).
-    # XML emits the bare UNCL1001 code (380/381/480/81) via tca_uncl1001_code;
-    # the self-billing variants only differ in CustomizationID/ProfileID.
+    # Stored value is the UNCL1001 code emitted directly in XML:
+    #   380 = Tax Invoice               381 = Tax Credit Note
+    #   389 = Self-Billing Tax Invoice  261 = Self-Billing Tax Credit Note
+    #   480 = Out-of-Scope Invoice       81 = Out-of-Scope Credit Note
+    # Self-billing has its own type code (389/261) per current PINT AE spec.
+    # The local schematron in `data/schematron/` has been patched to include
+    # 389/261 in `ibr-cl-01`'s allowed list.
 
-    _TYPE_INVOICE_TO_REFUND = {'380': '381', '380_sb': '381_sb', '480': '81'}
-    _TYPE_REFUND_TO_INVOICE = {'381': '380', '381_sb': '380_sb', '81': '480'}
+    _TYPE_INVOICE_TO_REFUND = {'380': '381', '389': '261', '480': '81'}
+    _TYPE_REFUND_TO_INVOICE = {'381': '380', '261': '389', '81': '480'}
 
     tca_invoice_type_code = fields.Selection(
         selection=[
             ('380', '380 — Tax Invoice'),
             ('381', '381 — Tax Credit Note'),
-            ('380_sb', 'Self-Billing Tax Invoice'),
-            ('381_sb', 'Self-Billing Tax Credit Note'),
+            ('389', '389 — Self-Billing Tax Invoice'),
+            ('261', '261 — Self-Billing Tax Credit Note'),
             ('480', '480 — Out-of-Scope Invoice'),
-            ('81', '81 — Out-of-Scope Credit Note'),
+            ('81',  '81 — Out-of-Scope Credit Note'),
         ],
         string='Invoice Type Code',
         compute='_compute_tca_invoice_type_code',
@@ -504,24 +568,16 @@ class AccountMove(models.Model):
         readonly=False,
         copy=True,
         help=(
-            'PINT AE invoice type code.\n'
+            'PINT AE UNCL1001 document type code (emitted as-is in XML).\n'
             '380: Tax Invoice — standard sale with UAE VAT\n'
             '381: Tax Credit Note — reverses a 380\n'
-            'Self-Billing Tax Invoice: buyer issues 380 on behalf of supplier (UC4)\n'
-            'Self-Billing Tax Credit Note: buyer issues 381 on behalf of supplier (UC5)\n'
+            '389: Self-Billing Tax Invoice (buyer issues for supplier — UC4)\n'
+            '261: Self-Billing Tax Credit Note (buyer-issued — UC5)\n'
             '480: Out-of-Scope Invoice — not subject to UAE VAT\n'
             '81: Out-of-Scope Credit Note — reverses a 480\n'
-            'Self-billing variants emit the standard 380/381 UNCL1001 code with '
-            'the urn:peppol:pint:selfbilling-1@ae-1 customization.'
+            'Self-billing also emits the urn:peppol:pint:selfbilling-1@ae-1 '
+            'CustomizationID and triggers the BIS3 supplier/customer swap.'
         ),
-    )
-
-    tca_uncl1001_code = fields.Char(
-        compute='_compute_tca_uncl1001_code',
-        store=False,
-        string='UNCL1001 Code',
-        help='Actual UNCL1001 document type code emitted in the XML (380/381/480/81). '
-             'Strips the _sb suffix from self-billing variants.',
     )
 
     # ── User-facing OOS toggle ────────────────────────────────────────────────
@@ -667,63 +723,54 @@ class AccountMove(models.Model):
     )
 
     @api.depends('move_type', 'tca_is_out_of_scope',
-                 'journal_id', 'journal_id.is_self_billing')
+                 'journal_id.is_self_billing')
     def _compute_tca_invoice_type_code(self):
         """
-        Resolve the PINT AE document type code from move direction, the OOS
-        toggle, and the journal's `is_self_billing` flag:
+        Resolve the PINT AE document type code from move direction, OOS
+        toggle, and the journal's self-billing flag:
 
-            (out_invoice / in_invoice, regular)        → '380'    Tax Invoice
-            (out_invoice / in_invoice, OOS)            → '480'    Commercial Invoice (OOS)
-            (out_refund  / in_refund,  regular)        → '381'    Tax Credit Note
-            (out_refund  / in_refund,  OOS)            → '81'     OOS Credit Note
-            (in_invoice on self-billing journal)       → '380_sb' Self-Billing Tax Invoice
-            (in_refund  on self-billing journal)       → '381_sb' Self-Billing Tax Credit Note
+            regular invoice (out_invoice / in_invoice, not OOS, not self-bill)
+                                                  → '380'
+            regular CN (out_refund / in_refund, not OOS, not self-bill)
+                                                  → '381'
+            self-bill invoice (in_invoice + journal.is_self_billing)
+                                                  → '389'
+            self-bill CN (in_refund + journal.is_self_billing)
+                                                  → '261'
+            OOS invoice (any direction + tca_is_out_of_scope, not self-bill)
+                                                  → '480'
+            OOS CN    (any direction + tca_is_out_of_scope, not self-bill)
+                                                  → '81'
 
-        Self-billing applies only to inbound move types — the buyer issues
-        the document on the supplier's behalf. The Odoo move stays
-        `in_invoice` / `in_refund`; the XML builder swaps supplier ↔ customer
-        when emitting (handled upstream in account_edi_xml_ubl_bis3).
-
-        OOS × self-billing is mutually exclusive in PINT AE — there is no
-        `480_sb` variant. Self-billing wins.
-
-        Inbound-received moves (tca_is_inbound=True) are not touched — the
-        XML importer is the source of truth for their type code.
+        Self-billing × OOS is mutually exclusive (no `480_sb`/`81_sb` in
+        PINT AE) — self-billing wins. Inbound-received moves are not
+        touched (importer is the source of truth).
         """
         for move in self:
-            # Inbound-received: importer is the source of truth.
             if move.tca_is_inbound:
                 continue
-
             is_self_bill = (
                 move.move_type in ('in_invoice', 'in_refund')
                 and move.journal_id.is_self_billing
             )
             if move.move_type in ('out_invoice', 'in_invoice'):
                 if is_self_bill:
-                    move.tca_invoice_type_code = '380_sb'
+                    move.tca_invoice_type_code = '389'
                 else:
                     move.tca_invoice_type_code = '480' if move.tca_is_out_of_scope else '380'
             elif move.move_type in ('out_refund', 'in_refund'):
                 if is_self_bill:
-                    move.tca_invoice_type_code = '381_sb'
+                    move.tca_invoice_type_code = '261'
                 else:
                     move.tca_invoice_type_code = '81' if move.tca_is_out_of_scope else '381'
             else:
                 move.tca_invoice_type_code = False
 
     @api.depends('tca_invoice_type_code')
-    def _compute_tca_uncl1001_code(self):
-        for move in self:
-            code = move.tca_invoice_type_code or ''
-            move.tca_uncl1001_code = code[:-3] if code.endswith('_sb') else (code or False)
-
-    @api.depends('tca_invoice_type_code')
     def _compute_tca_type_visibility(self):
         for move in self:
             code = move.tca_invoice_type_code or ''
-            move.tca_show_credit_note_fields = code in ('381', '381_sb', '81')
+            move.tca_show_credit_note_fields = code in ('381', '261', '81')
             move.tca_is_out_of_scope_type = code in ('480', '81')
 
     @api.onchange('tca_invoice_type_code')
@@ -787,8 +834,12 @@ class AccountMove(models.Model):
 
     @api.depends('tca_invoice_type_code')
     def _compute_tca_is_self_billing(self):
+        # Self-bill = type code is one of the EN16931 self-billing variants
+        # (389/261). The type code itself is the source of truth so an
+        # inbound importer can override it from the received XML even when
+        # we don't see the journal flag.
         for move in self:
-            move.tca_is_self_billing = (move.tca_invoice_type_code or '').endswith('_sb')
+            move.tca_is_self_billing = move.tca_invoice_type_code in ('389', '261')
     tca_contract_value = fields.Char(
         string='Contract Value (BTAE-05)',
         copy=True,
@@ -936,6 +987,33 @@ class AccountMove(models.Model):
                     '  • 10-digit Peppol Participant ID: starts with 1 (e.g. 1234567890), or\n'
                     '  • One of the PINT AE predefined endpoints (9900000097/98/99).\n'
                     'The 15-digit TRN goes in the customer\'s "Tax ID" field, not here.\n'
+                    'Current: "%s".',
+                    pid,
+                ))
+
+    @api.constrains('tca_seller_participant_id', 'partner_id')
+    def _check_tca_seller_participant_id_format(self):
+        # Mirror the buyer-side format check. For self-bills the seller is
+        # the vendor (partner_id); for outbound the seller is our company.
+        # FTA predefined endpoints (9900000097/98/99) bypass via ANON_BUYER_PIDS.
+        re_uae_format = re.compile(r'^1[0-9]{9}$')
+        for move in self:
+            pid = (move.tca_seller_participant_id or '').strip()
+            if not pid or pid in ANON_BUYER_PIDS:
+                continue
+            seller = (
+                move.partner_id.commercial_partner_id
+                if move.tca_is_self_billing
+                else move.company_id.partner_id.commercial_partner_id
+            )
+            if not seller._tca_is_uae_party():
+                continue
+            if not re_uae_format.match(pid):
+                raise ValidationError(_(
+                    '"Seller Participant ID" for UAE sellers must be either:\n'
+                    '  • 10-digit Peppol Participant ID: starts with 1 (e.g. 1234567890), or\n'
+                    '  • One of the PINT AE predefined endpoints (9900000097/98/99).\n'
+                    'The 15-digit TRN goes in the "Tax ID" field, not here.\n'
                     'Current: "%s".',
                     pid,
                 ))
@@ -1142,6 +1220,19 @@ class AccountMove(models.Model):
         self.ensure_one()
         return self.invoice_line_ids.filtered(lambda line: line.display_type == 'product')
 
+    def _compute_display_send_button(self):
+        """
+        EXTENDS account.move.
+        Upstream shows the Send button only for posted SALE documents
+        (out_invoice / out_refund). Self-bills are `in_invoice` / `in_refund`
+        on a self-billing journal — we ISSUE them outbound to TCA so they
+        also need the Send action. Mirror our send eligibility predicate.
+        """
+        super()._compute_display_send_button()
+        for move in self:
+            if not move.display_send_button and move._tca_is_send_eligible():
+                move.display_send_button = True
+
     def _tca_is_send_eligible(self):
         """
         Returns True if this invoice can be submitted (or resubmitted) to TCA.
@@ -1240,8 +1331,8 @@ class AccountMove(models.Model):
     def _tca_check_document(self):
         self.ensure_one()
         errs = {}
-        type_code = self.tca_uncl1001_code or ''
-        is_credit_note = type_code in ('381', '81')
+        type_code = self.tca_invoice_type_code or ''
+        is_credit_note = type_code in ('381', '261', '81')
 
         if not self.tca_invoice_type_code:
             errs['pint_ae_type_code'] = _(
@@ -1266,17 +1357,39 @@ class AccountMove(models.Model):
         if not self.invoice_date_due and not self.invoice_payment_term_id:
             errs['pint_ae_due_date_or_term'] = _('"Due Date" or "Payment Terms" is required.')
 
+        # Buyer + Seller Participant IDs — both mandatory on every TCA-issued
+        # document. Auto-populated from the partner / company peppol_endpoint
+        # when present; the user enters the FTA predefined endpoint
+        # (9900000097 / 98 / 99) manually when the party isn't on the
+        # Peppol network. The contact-level field is NOT mandatory — the
+        # invoice-level field is.
         buyer_pid = (self.tca_buyer_participant_id or '').strip()
         if not buyer_pid:
             errs['pint_ae_buyer_pid'] = _(
                 '"Buyer Participant ID" is required. '
-                'Enter the buyer\'s Peppol Participant ID in the "Invoice & Buyer" section.'
+                'Enter the buyer\'s Peppol Participant ID in the "Invoice & Buyer" section. '
+                'Use one of the FTA predefined endpoints (9900000097 / 9900000098 / '
+                '9900000099) if the buyer isn\'t on the Peppol network.'
             )
         elif buyer_pid != '1XXXXXXXXX' and (not buyer_pid.isdigit() or len(buyer_pid) != 10):
             errs['pint_ae_buyer_pid_format'] = _(
                 '"Buyer Participant ID" must be exactly 10 digits. '
                 'The 15-digit TRN belongs in the "Tax ID" field, not here. Current value: "%s".',
                 buyer_pid,
+            )
+
+        seller_pid = (self.tca_seller_participant_id or '').strip()
+        if not seller_pid:
+            errs['pint_ae_seller_pid'] = _(
+                '"Seller Participant ID" is required. '
+                'Enter the seller\'s Peppol Participant ID in the "Invoice & Buyer" section. '
+                'Use one of the FTA predefined endpoints (9900000097 / 9900000098 / '
+                '9900000099) if the seller isn\'t on the Peppol network.'
+            )
+        elif not seller_pid.isdigit() or len(seller_pid) != 10:
+            errs['pint_ae_seller_pid_format'] = _(
+                '"Seller Participant ID" must be exactly 10 digits. Current value: "%s".',
+                seller_pid,
             )
 
         flags = (self.tca_transaction_type_flags or '').strip()
@@ -1366,7 +1479,7 @@ class AccountMove(models.Model):
         self.ensure_one()
         errs = {}
         supplier = self.company_id.partner_id.commercial_partner_id
-        type_code = self.tca_uncl1001_code or ''
+        type_code = self.tca_invoice_type_code or ''
         is_oos = type_code in ('480', '81')
 
         if not supplier.name:
@@ -1398,12 +1511,11 @@ class AccountMove(models.Model):
             errs['pint_ae_supplier_country'] = _(
                 'Your company\'s "Country" (IBT-040) is missing.'
             )
-        if supplier._tca_is_uae_party():
-            if supplier._tca_emirate() not in UAE_EMIRATES:
-                errs['pint_ae_supplier_emirate'] = _(
-                    'Your company\'s "Emirate" must be set to one of: '
-                    'AUH, DXB, SHJ, UAQ, FUJ, AJM, RAK.'
-                )
+        if supplier._tca_is_uae_party() and supplier._tca_emirate() not in UAE_EMIRATES:
+            errs['pint_ae_supplier_emirate'] = _(
+                'Your company\'s "Emirate" must be set to one of: '
+                'AUH, DXB, SHJ, UAQ, FUJ, AJM, RAK.'
+            )
 
         seller_legal_reg = (
             supplier.tca_trade_license
@@ -1550,7 +1662,7 @@ class AccountMove(models.Model):
                 )
                 return errs
 
-        type_code = self.tca_uncl1001_code or ''
+        type_code = self.tca_invoice_type_code or ''
         if type_code in ('480', '81'):
             allowed = {'E', 'O', 'Z'} if type_code == '480' else {'E', 'O'}
             allowed_str = ', '.join(sorted(allowed))
@@ -1797,13 +1909,27 @@ class AccountMove(models.Model):
           revision. TODO: implement a custom counter for TCA-active journals.
         """
         # ── Phase 1: pre-post fast checks ─────────────────────────────────────
+        # Scope: any document we ISSUE through TCA. That's:
+        #   · sale documents (out_invoice / out_refund) AND
+        #   · self-bills (in_invoice / in_refund on a self-billing journal —
+        #     buyer issues on the supplier's behalf).
+        # Plain vendor bills are filtered out — they're received, not issued.
         pint_moves = self.env['account.move']
         for move in self:
             partner = move.partner_id.commercial_partner_id
+            is_issued_by_us = move.is_sale_document() or move.tca_is_self_billing
+            # Outbound requires the partner to have the PINT AE format set
+            # (so we can route to them). Self-bills don't — the buyer issues
+            # on TCA on the supplier's behalf regardless of the supplier's
+            # Peppol presence.
+            partner_eligible = (
+                move.tca_is_self_billing
+                or partner.invoice_edi_format == 'ubl_pint_ae'
+            )
             if (
                 move.company_id.tca_is_active
-                and move.is_sale_document()
-                and partner.invoice_edi_format == 'ubl_pint_ae'
+                and is_issued_by_us
+                and partner_eligible
             ):
                 errors = move._tca_validate_mandatory_fields()
                 if errors:
@@ -1841,8 +1967,12 @@ class AccountMove(models.Model):
         # cannot reconcile (TCA documents cannot be un-submitted). To prevent
         # this we restrict atomic credit-note posting to a single record per
         # call. Multi-confirm of credit notes must be done one at a time.
+        # Atomic credit-note submission applies to both outbound and self-bill
+        # credit notes — they're both issued by us, and the UAE FTA "no books
+        # without Peppol acceptance" rule applies symmetrically.
         credit_notes = pint_moves.filtered(
-            lambda m: m.move_type == 'out_refund'
+            lambda m: (m.move_type == 'out_refund'
+                      or (m.move_type == 'in_refund' and m.tca_is_self_billing))
             and m.tca_move_state in ('not_sent', 'error', 'rejected')
         )
         if len(credit_notes) > 1:
@@ -2155,9 +2285,8 @@ class AccountMove(models.Model):
                 self.env.cr.commit()
                 self.env.invalidate_all()
 
-                if move:
-                    if created_at > latest_created_at:
-                        latest_created_at = created_at
+                if move and created_at > latest_created_at:
+                    latest_created_at = created_at
 
             # G-4: follow pagination
             if not next_url:

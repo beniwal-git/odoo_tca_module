@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- ══════════════════════════════════════════════════════════════════════
+         SEND & PRINT WIZARD — rename the "Generate" footer button to "Send".
+
+         Upstream has two footer buttons with the same action:
+           - "Send"     visible when sending_methods (email/post) selected
+           - "Generate" visible when no sending_methods selected
+         For our flow the "no sending_method" case is usually "Submit via
+         TCA Peppol" only — which IS a network submission, so "Generate"
+         was misleading. Simplest fix: rename the second button to "Send".
+         ══════════════════════════════════════════════════════════════════════ -->
+    <record id="account_move_send_wizard_form_tca" model="ir.ui.view">
+        <field name="name">account.move.send.wizard.form.tca</field>
+        <field name="model">account.move.send.wizard</field>
+        <field name="inherit_id" ref="account.account_move_send_wizard_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//footer/button[@string='Generate']" position="attributes">
+                <attribute name="string">Send</attribute>
+            </xpath>
+        </field>
+    </record>
+
+</odoo>

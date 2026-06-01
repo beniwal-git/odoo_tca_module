@@ -2917,10 +2917,10 @@
                        context="cbc:InvoiceTypeCode | cbc:CreditNoteTypeCode"/>
       <!--ASSERT -->
       <xsl:choose>
-         <xsl:when test="(self::cbc:InvoiceTypeCode and ((not(contains(normalize-space(.), ' ')) and contains(' 80 82 84 380 383 386 388 393 395 575 623 780 71 102 218 219 331 382 480 553 817 870 875 876 877 ', concat(' ', normalize-space(.), ' '))))) or (self::cbc:CreditNoteTypeCode and ((not(contains(normalize-space(.), ' ')) and contains(' 81 83 381 396 532 ', concat(' ', normalize-space(.), ' ')))))"/>
+         <xsl:when test="(self::cbc:InvoiceTypeCode and ((not(contains(normalize-space(.), ' ')) and contains(' 80 82 84 380 383 386 388 389 393 395 575 623 780 71 102 218 219 331 382 480 553 817 870 875 876 877 ', concat(' ', normalize-space(.), ' '))))) or (self::cbc:CreditNoteTypeCode and ((not(contains(normalize-space(.), ' ')) and contains(' 81 83 261 381 396 532 ', concat(' ', normalize-space(.), ' ')))))"/>
          <xsl:otherwise>
             <svrl:failed-assert xmlns:svrl="http://purl.oclc.org/dsdl/svrl"
-                                test="(self::cbc:InvoiceTypeCode and ((not(contains(normalize-space(.), ' ')) and contains(' 80 82 84 380 383 386 388 393 395 575 623 780 71 102 218 219 331 382 480 553 817 870 875 876 877 ', concat(' ', normalize-space(.), ' '))))) or (self::cbc:CreditNoteTypeCode and ((not(contains(normalize-space(.), ' ')) and contains(' 81 83 381 396 532 ', concat(' ', normalize-space(.), ' ')))))">
+                                test="(self::cbc:InvoiceTypeCode and ((not(contains(normalize-space(.), ' ')) and contains(' 80 82 84 380 383 386 388 389 393 395 575 623 780 71 102 218 219 331 382 480 553 817 870 875 876 877 ', concat(' ', normalize-space(.), ' '))))) or (self::cbc:CreditNoteTypeCode and ((not(contains(normalize-space(.), ' ')) and contains(' 81 83 261 381 396 532 ', concat(' ', normalize-space(.), ' ')))))">
                <xsl:attribute name="id">ibr-cl-01</xsl:attribute>
                <xsl:attribute name="flag">fatal</xsl:attribute>
                <xsl:attribute name="location">

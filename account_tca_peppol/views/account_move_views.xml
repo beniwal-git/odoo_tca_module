@@ -113,7 +113,7 @@
                          column inside these sections so input cells always have
                          ≥200px (visible 10-digit IDs, emirate codes, etc.). -->
                     <div class="row g-4 mb-3 o_tca_pint_row"
-                         invisible="move_type in ('in_invoice', 'in_refund')">
+                         invisible="move_type in ('in_invoice', 'in_refund') and not tca_is_self_billing">
                         <div class="col-12 col-xxl o_tca_pint_col">
                             <group string="Invoice &amp; Buyer">
                                 <!-- TCA fields are not view-level required: drafts can be saved
@@ -126,13 +126,21 @@
                                      Tax Invoice and Commercial Invoice. The field itself is
                                      still read by the XML builder. -->
                                 <field name="tca_invoice_type_code" invisible="1"/>
+                                <!-- OOS toggle is meaningless for self-bills
+                                     (no 480_sb variant in PINT AE — self-bill
+                                     wins). Hide on self-bill rather than
+                                     show-but-disabled. -->
                                 <field name="tca_is_out_of_scope"
+                                       invisible="tca_is_self_billing"
                                        readonly="move_type in ('in_invoice', 'in_refund') or reversed_entry_id"/>
                                 <field name="tca_buyer_reference" string="Buyer Reference"
                                        placeholder="e.g. PO-001/23"
                                        readonly="move_type in ('in_invoice', 'in_refund')"/>
                                 <field name="tca_buyer_participant_id" string="Buyer Participant ID"
-                                       readonly="move_type in ('in_invoice', 'in_refund')"/>
+                                       readonly="move_type in ('in_invoice', 'in_refund') and not tca_is_self_billing"/>
+                                <field name="tca_seller_participant_id" string="Seller Participant ID"
+                                       readonly="move_type in ('in_invoice', 'in_refund') and not tca_is_self_billing"
+                                       placeholder="Vendor's Peppol Endpoint or 10-digit fallback"/>
                                 <field name="tca_buyer_emirate"
                                        invisible="not tca_buyer_is_uae"
                                        readonly="move_type in ('in_invoice', 'in_refund')"/>

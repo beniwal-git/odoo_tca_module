@@ -49,6 +49,7 @@
         'views/res_partner_views.xml',
         'views/res_company_views.xml',
         'views/account_tax_views.xml',
+        'wizard/account_move_send_wizard_views.xml',
     ],
     'assets': {
         'web.assets_backend': [
@@ -59,7 +60,6 @@
     'auto_install': False,
     'installable': True,
     'application': False,
-    'post_init_hook': '_post_init_migrate_invoice_type_code',
     'images': [],
     # Test files — discovered by Odoo's test runner via tests/__init__.py
     # Run with:  ./odoo-bin -i account_tca_peppol --test-enable --stop-after-init

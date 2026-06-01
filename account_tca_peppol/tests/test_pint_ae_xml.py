@@ -5,14 +5,14 @@ E3: XML generation — out_refund (credit note)
 E4: Constraint / validation error tests (missing fields)
 """
 
+from unittest import skip
+
 from lxml import etree
 
 from odoo.addons.account_tca_peppol.constants import (
     PINT_AE_CUSTOMIZATION_ID,
     PINT_AE_PROFILE_ID,
 )
-from unittest import skip
-
 from odoo.tests import tagged
 
 from .common import TcaTestCase

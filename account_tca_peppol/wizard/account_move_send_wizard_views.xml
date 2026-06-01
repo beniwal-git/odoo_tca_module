@@ -16,7 +16,7 @@
         <field name="model">account.move.send.wizard</field>
         <field name="inherit_id" ref="account.account_move_send_wizard_form"/>
         <field name="arch" type="xml">
-            <xpath expr="//footer/button[@string='Generate']" position="attributes">
+            <xpath expr="(//footer/button[@name='action_send_and_print'])[2]" position="attributes">
                 <attribute name="string">Send</attribute>
             </xpath>
         </field>

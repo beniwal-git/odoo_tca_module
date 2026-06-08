@@ -12,6 +12,15 @@ __pycache__/
 
 # LLM artifacts
 llm/
+.llm/
 
 # Kiro
 .claude/
+
+# Dev scripts
+run_odoo.sh
+start_odoo.sh
+stop_odoo.sh
+
+# v19 migration workspace
+v19/

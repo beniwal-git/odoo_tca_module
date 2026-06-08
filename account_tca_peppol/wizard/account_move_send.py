@@ -32,11 +32,11 @@ silently. On failure the move's `tca_move_state` is rolled back to `error`,
 Send & Print wizard reports it to the user (and, for batch sends, blocks the
 mail/attachment step for that invoice).
 
-Note on credit notes: credit-note submission is *atomic with Confirm* via
-`account.move._post()` Phase 3 — it does not depend on this wizard. By the
-time the Send dialog runs, a credit note has already left `not_sent`, so
-`_tca_is_send_eligible()` returns False for it and the hook below skips it.
-This wizard path therefore drives regular outbound invoices only.
+Credit notes follow the same flow as invoices: Confirm posts them in the
+ledger; the user then clicks Send & Print and ticks the TCA Peppol
+checkbox to push the document to the network. Earlier revisions submitted
+credit notes atomically at Confirm; that compliance-first guarantee was
+relaxed for UX consistency with regular invoices.
 """
 
 import logging

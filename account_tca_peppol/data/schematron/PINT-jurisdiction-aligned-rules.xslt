@@ -1006,10 +1006,10 @@
       </xsl:choose>
       <!--ASSERT -->
       <xsl:choose>
-         <xsl:when test="not(matches(cbc:ProfileExecutionID, &#34;^1[01]{6}$&#34;)) or cac:BuyerCustomerParty/cac:Party/cac:PartyIdentification/cbc:ID"/>
+         <xsl:when test="not(matches(cbc:ProfileExecutionID, &#34;^1[01]{7}$&#34;)) or cac:BuyerCustomerParty/cac:Party/cac:PartyIdentification/cbc:ID"/>
          <xsl:otherwise>
             <svrl:failed-assert xmlns:svrl="http://purl.oclc.org/dsdl/svrl"
-                                test="not(matches(cbc:ProfileExecutionID, &#34;^1[01]{6}$&#34;)) or cac:BuyerCustomerParty/cac:Party/cac:PartyIdentification/cbc:ID">
+                                test="not(matches(cbc:ProfileExecutionID, &#34;^1[01]{7}$&#34;)) or cac:BuyerCustomerParty/cac:Party/cac:PartyIdentification/cbc:ID">
                <xsl:attribute name="id">ibr-007-ae</xsl:attribute>
                <xsl:attribute name="flag">fatal</xsl:attribute>
                <xsl:attribute name="location">

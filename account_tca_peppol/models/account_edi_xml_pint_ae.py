@@ -124,6 +124,18 @@ class AccountEdiXmlUBLPintAe(models.AbstractModel):
                     party['cac:PartyLegalEntity'],
                     'cbc:CompanyID', 'cbc:CompanyLegalForm', {})
 
+        # BTAE-01: BuyerCustomerParty slot for the FTZ Beneficiary ID.
+        # PINT AE rule ibr-007-ae requires cac:BuyerCustomerParty/cac:Party/
+        # cac:PartyIdentification/cbc:ID when ProfileExecutionID starts with '1'.
+        # Slot is inserted unconditionally (after AccountingCustomerParty per
+        # UBL 2.1 schema order); the emission override populates it only when
+        # the invoice carries a beneficiary ID.
+        template = self._tca_tmpl_insert_after(
+            template, 'cac:AccountingCustomerParty',
+            'cac:BuyerCustomerParty',
+            {'cac:Party': {'cac:PartyIdentification': {'cbc:ID': {}}}},
+        )
+
         # Invoice / credit-note line.
         line_tmpl = template.get(line_key) or {}
         item_tmpl = line_tmpl.get('cac:Item')
@@ -408,12 +420,49 @@ class AccountEdiXmlUBLPintAe(models.AbstractModel):
             key['percent'] = None
         return key
 
+    def _ubl_get_tax_subtotal_node(self, vals, tax_subtotal):
+        # EXTENDS account.edi.xml.ubl (called via the BIS3 pipeline) —
+        # ibr-108-ae: in a TaxSubtotal block where the VAT category is 'N'
+        # (Standard Rate Additional VAT), the TaxAmount MUST be 0. The
+        # additional base is reported but the tax itself isn't added to
+        # this invoice's payable totals (it's accounted for elsewhere).
+        # Force the value here regardless of what Odoo computed.
+        node = super()._ubl_get_tax_subtotal_node(vals, tax_subtotal)
+        categories = node.get('cac:TaxCategory') or []
+        if not isinstance(categories, list):
+            categories = [categories]
+        is_n = any(
+            (cat.get('cbc:ID') or {}).get('_text') == 'N'
+            for cat in categories
+        )
+        if is_n:
+            currency = tax_subtotal['currency']
+            node['cbc:TaxAmount']['_text'] = FloatFmt(0.0, min_dp=currency.decimal_places)
+        return node
+
     def _ubl_get_tax_total_node(self, vals, tax_total):
-        # EXTENDS account.edi.xml.ubl — IBT-200: PINT AE B2B pricing is always
-        # VAT-exclusive, so the document TaxTotal carries TaxIncludedIndicator
-        # = false.
+        # EXTENDS account.edi.xml.ubl —
+        #   IBT-200: PINT AE B2B pricing is always VAT-exclusive, so the
+        #   document TaxTotal carries TaxIncludedIndicator = false.
+        #
+        #   ibr-co-14: Invoice total TaxAmount must equal the sum of the
+        #   subtotal TaxAmounts. Our `_ubl_get_tax_subtotal_node` override
+        #   forces TaxAmount=0 for category N (ibr-108-ae), which makes
+        #   super()'s pre-computed grand total drift. Re-sum from the
+        #   modified subtotal nodes to restore the invariant.
         node = super()._ubl_get_tax_total_node(vals, tax_total)
         node['cbc:TaxIncludedIndicator'] = {'_text': 'false'}
+        subtotals = node.get('cac:TaxSubtotal') or []
+        if not isinstance(subtotals, list):
+            subtotals = [subtotals]
+        total = sum(
+            sub['cbc:TaxAmount']['_text']
+            for sub in subtotals
+            if sub.get('cbc:TaxAmount') and sub['cbc:TaxAmount'].get('_text') is not None
+        )
+        currency = vals.get('currency') or vals.get('currency_id')
+        if currency is not None:
+            node['cbc:TaxAmount']['_text'] = FloatFmt(float(total), min_dp=currency.decimal_places)
         return node
 
     # ──────────────────────────────────────────────────────────────────────────
@@ -440,20 +489,62 @@ class AccountEdiXmlUBLPintAe(models.AbstractModel):
             if isinstance(ids, list):
                 ids.append({'cbc:ID': {'_text': invoice.tca_delivery_party_trn}})
 
+        # ibr-142-ae: when the move carries explicit Delivery Address fields
+        # (set by the E-commerce flag's onchange or the user), overwrite the
+        # auto-emitted Address values so the XML reflects the user's intent.
+        # Each field is overwritten only when set — partial overrides fall
+        # back to upstream's partner-derived values.
+        if (
+            invoice.tca_delivery_street
+            or invoice.tca_delivery_city
+            or invoice.tca_delivery_state_id
+        ):
+            location = delivery.setdefault('cac:DeliveryLocation', {})
+            address = location.setdefault('cac:Address', {})
+            if invoice.tca_delivery_street:
+                address['cbc:StreetName'] = {'_text': invoice.tca_delivery_street}
+            if invoice.tca_delivery_city:
+                address['cbc:CityName'] = {'_text': invoice.tca_delivery_city}
+            if invoice.tca_delivery_state_id:
+                state = invoice.tca_delivery_state_id
+                address['cbc:CountrySubentity'] = {'_text': state.name}
+                address['cbc:CountrySubentityCode'] = {'_text': state.code}
+
     def _add_invoice_payment_means_nodes(self, document_node, vals):
-        # EXTENDS account.edi.xml.ubl_bis3 — ibr-191-ae: a PINT AE credit note
-        # (type code 381/81/261) or a Deemed-Supply invoice MUST NOT carry a
-        # PaymentMeans element. Odoo 19's account.edi.xml.ubl_21._get_invoice_node
-        # adds PaymentMeans to credit notes too (UBL 2.1 permits it), so it must
-        # be actively suppressed here for both cases — an empty list renders no
-        # node.
+        # EXTENDS account.edi.xml.ubl_bis3
+        #   ibr-191-ae: PINT AE credit notes (type code 381/81/261) MUST NOT
+        #   carry a PaymentMeans element. Suppress it for CN (empty list →
+        #   no node from dict_to_xml).
+        #   For all other documents, super() emits the upstream auto-default
+        #   (30 if a bank is set, ZZZ otherwise) — we then overwrite that
+        #   PaymentMeansCode with the user's `tca_payment_means_code` choice.
+        #   When the field is blank AND the doc is Deemed Supply (which
+        #   per spec exempts PaymentMeans from being required but TCA's
+        #   server still wants the element present), we fall back to 'ZZZ'.
         invoice = vals['invoice']
-        flags = (invoice.tca_transaction_type_flags or '00000000').ljust(8, '0')
         is_credit_note = invoice.move_type in ('out_refund', 'in_refund')
-        if is_credit_note or flags[1] == '1':
+        if is_credit_note:
             document_node['cac:PaymentMeans'] = []
             return
         super()._add_invoice_payment_means_nodes(document_node, vals)
+        code = invoice.tca_payment_means_code
+        if not code:
+            flags = (invoice.tca_transaction_type_flags or '00000000').ljust(8, '0')
+            if flags[1] == '1':
+                code = 'ZZZ'
+            else:
+                return  # confirm-time validator already blocks this case
+        nodes = document_node.get('cac:PaymentMeans') or []
+        if not isinstance(nodes, list):
+            nodes = [nodes]
+        for node in nodes:
+            means_code = node.get('cbc:PaymentMeansCode')
+            if means_code is not None:
+                means_code['_text'] = code
+                # The auto-injected `name` (e.g. "credit transfer") no longer
+                # matches the user's choice; drop it. The attribute is
+                # optional in UNCL4461.
+                means_code.pop('name', None)
 
     def _get_party_node(self, vals):
         # EXTENDS account.edi.xml.ubl_20 — when the move carries an explicit
@@ -498,6 +589,22 @@ class AccountEdiXmlUBLPintAe(models.AbstractModel):
                     'cac:PartyIdentification': [
                         {'cbc:ID': {'_text': principal}},
                     ],
+                },
+            }
+
+    def _add_invoice_accounting_customer_party_nodes(self, document_node, vals):
+        # EXTENDS account.edi.xml.ubl_20 — BTAE-01: emit the FTZ Beneficiary ID
+        # in the BuyerCustomerParty slot when the move carries one. Validator
+        # `ibr-007-ae` (PINT-jurisdiction-aligned-rules.xslt) requires this
+        # element whenever ProfileExecutionID starts with '1' (FTZ flag set).
+        super()._add_invoice_accounting_customer_party_nodes(document_node, vals)
+        beneficiary = (vals['invoice'].tca_buyer_beneficiary_id or '').strip()
+        if beneficiary:
+            document_node['cac:BuyerCustomerParty'] = {
+                'cac:Party': {
+                    'cac:PartyIdentification': {
+                        'cbc:ID': {'_text': beneficiary},
+                    },
                 },
             }
 

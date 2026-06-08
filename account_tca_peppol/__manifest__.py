@@ -57,6 +57,8 @@
             'account_tca_peppol/static/src/scss/account_move_form.scss',
         ],
     },
+    'price': 1600.00,
+    'currency': 'EUR',
     'license': 'OPL-1',
     'auto_install': False,
     'installable': True,

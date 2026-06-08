@@ -1,7 +1,7 @@
 # Part of TCA. See LICENSE file for full copyright and licensing details.
 
 {
-    'name': 'Suntech - TCA E-Invoicing (UAE)',
+    'name': 'Suntech E-Invoicing UAE',
     'version': '19.0.1.0.0',
     'category': 'Accounting/Accounting',
     'summary': 'UAE PINT AE e-invoicing via TCA Access Point',
@@ -20,6 +20,7 @@
     """,
     'author': 'Suntech - Tax Compliance Agent',
     'website': 'https://taxcomplianceagent.com/',
+    'support': 'support@taxcomplianceagent.com',  # TODO confirm real support inbox
     'depends': [
         'account',
         'account_edi_ubl_cii',
@@ -60,7 +61,7 @@
     'auto_install': False,
     'installable': True,
     'application': False,
-    'images': [],
+    'images': ['static/description/banner.png'],
     # Test files — discovered by Odoo's test runner via tests/__init__.py
     # Run with:  ./odoo-bin -i account_tca_peppol --test-enable --stop-after-init
     # Or tagged: --test-tags account_tca_peppol

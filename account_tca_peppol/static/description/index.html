@@ -1,0 +1,105 @@
+<section class="oe_container">
+    <div class="oe_row oe_spaced" style="text-align:center;">
+        <img src="Suntech-logo.png" alt="Suntech" style="max-width:320px; margin:24px auto;"/>
+        <h1 class="oe_slogan" style="color:#2C5F8A;">Suntech E-Invoicing UAE</h1>
+        <h3 class="oe_slogan" style="color:#5A6B7B;">
+            UAE PINT AE e-invoicing through the TCA Peppol Access Point — directly from Odoo
+        </h3>
+    </div>
+</section>
+
+<section class="oe_container oe_dark">
+    <div class="oe_row oe_spaced">
+        <h2 class="oe_slogan" style="color:#2C5F8A;">FTA-Aligned e-Invoicing, Built In</h2>
+        <div class="oe_span12">
+            <p class="oe_mt32" style="text-align:center;">
+                This module connects Odoo to the <b>TCA (Tax Compliance Agent)</b> Peppol Access
+                Point so UAE businesses can issue and receive compliant <b>PINT AE</b> electronic
+                invoices without leaving Odoo. It replaces Odoo's native <code>account_peppol</code>
+                with a direct Access Point integration tailored to the UAE mandate.
+            </p>
+        </div>
+    </div>
+</section>
+
+<section class="oe_container">
+    <div class="oe_row oe_spaced">
+        <h2 class="oe_slogan" style="color:#2C5F8A;">Key Features</h2>
+        <div class="oe_span6">
+            <h3 style="color:#2C5F8A;">Outbound Invoicing</h3>
+            <p>Generate UAE PINT AE (Peppol CIUS) UBL 2.1 XML and submit invoices and credit
+               notes to TCA. Accounting entries post only after TCA accepts the submission.</p>
+        </div>
+        <div class="oe_span6">
+            <h3 style="color:#2C5F8A;">Inbound Invoicing</h3>
+            <p>Receive supplier invoices and credit notes from the Peppol network via webhook,
+               automatically imported as draft vendor bills in Odoo.</p>
+        </div>
+    </div>
+    <div class="oe_row oe_spaced">
+        <div class="oe_span6">
+            <h3 style="color:#2C5F8A;">Real-Time Status Tracking</h3>
+            <p>A full lifecycle state machine tracks each document from upload through delivery
+               and buyer confirmation, updated live via secure webhooks.</p>
+        </div>
+        <div class="oe_span6">
+            <h3 style="color:#2C5F8A;">Secure & Multi-Company</h3>
+            <p>OAuth2 client-credentials authentication with per-company credentials, HMAC-verified
+               webhooks, and full multi-company support.</p>
+        </div>
+    </div>
+</section>
+
+<section class="oe_container oe_dark">
+    <div class="oe_row oe_spaced">
+        <h2 class="oe_slogan" style="color:#2C5F8A;">Compliance First</h2>
+        <div class="oe_span12">
+            <p class="oe_mt32" style="text-align:center;">
+                No accounting entries are posted unless TCA accepts the submission. Every
+                submission attempt uses a unique invoice number, and resubmission is allowed only
+                after a confirmed failure — keeping your books and the tax authority in sync.
+            </p>
+        </div>
+    </div>
+</section>
+
+<section class="oe_container">
+    <div class="oe_row oe_spaced">
+        <h2 class="oe_slogan" style="color:#2C5F8A;">Data Transparency</h2>
+        <div class="oe_span12">
+            <p class="oe_mt32">
+                This module transmits invoice data to the TCA Peppol Access Point only when you
+                explicitly submit a document, using credentials you configure per company. Data
+                sent to TCA includes the invoice UBL XML (parties, line items, tax and totals) as
+                required by the UAE e-invoicing mandate. No data is transmitted to any third party
+                without an explicit action. The module installs without external activation keys
+                and contains no obfuscated code.
+            </p>
+        </div>
+    </div>
+</section>
+
+<section class="oe_container">
+    <div class="oe_row oe_spaced">
+        <h2 class="oe_slogan" style="color:#2C5F8A;">Requirements</h2>
+        <div class="oe_span12">
+            <ul>
+                <li>Odoo 19.0</li>
+                <li>Depends on <code>account</code>, <code>account_edi_ubl_cii</code>, <code>l10n_ae</code></li>
+                <li>A TCA Access Point account and API credentials</li>
+                <li>Python <code>saxonche</code> (optional, enables local schematron validation)</li>
+            </ul>
+            <p class="oe_mt32"><b>Note:</b> conflicts with Odoo's native <code>account_peppol</code>;
+               the two cannot be installed together.</p>
+        </div>
+    </div>
+</section>
+
+<section class="oe_container oe_dark">
+    <div class="oe_row oe_spaced" style="text-align:center;">
+        <h2 class="oe_slogan" style="color:#2C5F8A;">Support</h2>
+        <p>Questions? Contact us at
+           <a href="mailto:support@taxcomplianceagent.com">support@taxcomplianceagent.com</a>
+           or visit <a href="https://taxcomplianceagent.com/">taxcomplianceagent.com</a>.</p>
+    </div>
+</section>

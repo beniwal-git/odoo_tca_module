@@ -382,6 +382,8 @@ class TestPintAeBtae02ExportFlag(TcaTestCase):
         """When buyer is non-AE and user set other flags, only export bit is forced; rest preserved."""
         invoice = self._make_invoice(partner=self.uk_partner)
         invoice.tca_transaction_type_flags = '10000000'  # FTZ flag + export = 0
+        # FTZ flag set → ibr-007-ae requires a Buyer Beneficiary ID.
+        invoice.tca_buyer_beneficiary_id = 'FZ-BENEF-001'
         pei = self._get_pei(invoice)
         self.assertEqual(pei[0], '1', 'FTZ bit (pos 1) must be preserved')
         self.assertEqual(pei[7], '1', 'Export bit (pos 8) must be auto-set to 1')

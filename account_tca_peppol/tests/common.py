@@ -151,6 +151,9 @@ class TcaTestCase(TransactionCase):
             'journal_id': self.journal.id,
             'invoice_date': fields.Date.today(),
             'tca_buyer_reference': 'PO-TEST-001',
+            # IBT-081 / ibr-191-ae: Payment Means Code is mandatory on invoices
+            # (not credit notes / deemed supplies). 30 = Credit transfer.
+            'tca_payment_means_code': '30',
             'invoice_line_ids': [(0, 0, {
                 'name': 'Consulting Services',
                 'quantity': quantity,

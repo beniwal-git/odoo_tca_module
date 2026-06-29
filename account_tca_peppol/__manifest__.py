@@ -60,7 +60,7 @@
     'price': 1600.00,
     'currency': 'EUR',
     'license': 'OPL-1',
-    'auto_install': False,
+    'auto_install': True,
     'installable': True,
     'application': False,
     'images': ['static/description/banner.png'],

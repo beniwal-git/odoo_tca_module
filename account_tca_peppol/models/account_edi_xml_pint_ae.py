@@ -911,6 +911,12 @@ class AccountEdiXmlUBLPintAe(models.AbstractModel):
         merges that dict into the bis3 constraints.
         """
         constraints = super()._export_invoice_constraints(invoice, vals)
+        # BR-CO-09 (EN16931) requires the VAT identifier to carry an ISO 3166-1
+        # alpha-2 country prefix. UAE TRNs are 15-digit numbers with NO prefix,
+        # so this CEN rule does not apply to PINT AE. Upstream only guards it for
+        # ubl_bis3/nl/de, but some Odoo builds add it to subclasses too — drop it.
+        constraints.pop('cen_en16931_supplier_vat_country_code', None)
+        constraints.pop('cen_en16931_customer_vat_country_code', None)
         constraints.update(invoice._tca_collect_validation_errors())
         return constraints
 

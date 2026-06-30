@@ -24,3 +24,7 @@ stop_odoo.sh
 
 # v19 migration workspace
 v19/
+
+# Build artifact
+account_tca_peppol.zip
+*.zip

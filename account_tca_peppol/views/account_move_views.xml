@@ -112,8 +112,19 @@
                          static/src/scss/account_move_form.scss sets a fixed 160px label
                          column inside these sections so input cells always have
                          ≥200px (visible 10-digit IDs, emirate codes, etc.). -->
+                    <!-- Per-document e-invoicing opt-out. Subtle toggle, default ON.
+                         Shown only for documents WE issue (out_* or self-bill) under
+                         an active TCA company. Off → the PINT AE fields below vanish,
+                         the _post() mandatory-field gate is skipped, the AED currency
+                         lock lifts, and the move is not "Submit via TCA"-eligible. -->
+                    <div class="d-flex align-items-center gap-2 mb-2 text-muted o_tca_einvoice_toggle"
+                         invisible="not tca_company_is_active or tca_is_inbound or (move_type not in ('out_invoice', 'out_refund') and not tca_is_self_billing)">
+                        <field name="tca_create_einvoice" widget="boolean_toggle" nolabel="1"
+                               readonly="state != 'draft'"/>
+                        <span class="small">Create UAE e-invoice (PINT AE)</span>
+                    </div>
                     <div class="row g-4 mb-3 o_tca_pint_row"
-                         invisible="move_type in ('in_invoice', 'in_refund') and not tca_is_self_billing">
+                         invisible="not tca_create_einvoice or (move_type in ('in_invoice', 'in_refund') and not tca_is_self_billing)">
                         <div class="col-12 col-xxl o_tca_pint_col">
                             <group string="Invoice &amp; Buyer">
                                 <!-- TCA fields are not view-level required: drafts can be saved
@@ -234,7 +245,7 @@
                     </div>
                     <!-- Additional Details — its own row below the 3-col row, only visible when special flags ask for it. -->
                     <group string="Additional Details"
-                           invisible="move_type in ('in_invoice', 'in_refund') or (not tca_flag_disclosed_agent and not tca_flag_continuous_supply and not tca_flag_summary_invoice and not tca_is_export)"
+                           invisible="not tca_create_einvoice or move_type in ('in_invoice', 'in_refund') or (not tca_flag_disclosed_agent and not tca_flag_continuous_supply and not tca_flag_summary_invoice and not tca_is_export)"
                            class="mt-3">
                         <field name="tca_principal_id" string="Principal TRN"
                                invisible="not tca_flag_disclosed_agent"/>
@@ -291,11 +302,11 @@
 
             <!-- ── Invoice line columns: UAE fields ────────────────────── -->
             <xpath expr="//field[@name='invoice_line_ids']/list/field[@name='price_unit']" position="after">
-                <field name="tca_commodity_type" optional="show" string="Commodity (UAE)"/>
-                <field name="tca_hs_code" optional="show" string="HS Code"/>
-                <field name="tca_service_accounting_code" optional="hide" string="SAC"/>
-                <field name="tca_standard_item_id" optional="hide" string="GTIN / Standard ID"/>
-                <field name="tca_rc_description" optional="hide" string="RC Description"/>
+                <field name="tca_commodity_type" optional="show" string="Commodity (UAE)" column_invisible="not parent.tca_create_einvoice"/>
+                <field name="tca_hs_code" optional="show" string="HS Code" column_invisible="not parent.tca_create_einvoice"/>
+                <field name="tca_service_accounting_code" optional="hide" string="SAC" column_invisible="not parent.tca_create_einvoice"/>
+                <field name="tca_standard_item_id" optional="hide" string="GTIN / Standard ID" column_invisible="not parent.tca_create_einvoice"/>
+                <field name="tca_rc_description" optional="hide" string="RC Description" column_invisible="not parent.tca_create_einvoice"/>
             </xpath>
 
             <!-- PINT AE requires Unit of Measure (IBT-130) on every line.
@@ -312,10 +323,10 @@
                  Domain mirrors upstream account/views/account_move_views.xml
                  (line list + line modal); update if upstream changes. -->
             <xpath expr="//field[@name='invoice_line_ids']/list/field[@name='tax_ids']" position="attributes">
-                <attribute name="domain">[('type_tax_use', '=?', parent.invoice_filter_type_domain), ('company_id', 'parent_of', parent.company_id), ('country_id', '=', parent.tax_country_id)] + ([('tca_tax_category', '!=', False)] if parent.tca_company_is_active else [])</attribute>
+                <attribute name="domain">[('type_tax_use', '=?', parent.invoice_filter_type_domain), ('company_id', 'parent_of', parent.company_id), ('country_id', '=', parent.tax_country_id)] + ([('tca_tax_category', '!=', False)] if parent.tca_company_is_active and parent.tca_create_einvoice else [])</attribute>
             </xpath>
             <xpath expr="//field[@name='invoice_line_ids']/form//field[@name='tax_ids']" position="attributes">
-                <attribute name="domain">[('type_tax_use', '=?', parent.invoice_filter_type_domain), ('company_id', 'parent_of', parent.company_id), ('country_id', '=', parent.tax_country_id)] + ([('tca_tax_category', '!=', False)] if parent.tca_company_is_active else [])</attribute>
+                <attribute name="domain">[('type_tax_use', '=?', parent.invoice_filter_type_domain), ('company_id', 'parent_of', parent.company_id), ('country_id', '=', parent.tax_country_id)] + ([('tca_tax_category', '!=', False)] if parent.tca_company_is_active and parent.tca_create_einvoice else [])</attribute>
             </xpath>
 
         </field>

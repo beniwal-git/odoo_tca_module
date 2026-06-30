@@ -135,6 +135,23 @@ class AccountMove(models.Model):
         store=False,
     )
 
+    # Per-document opt-out. Default ON so every issued document is e-invoiced
+    # unless the user explicitly turns it off on the form. When False the move
+    # behaves like a plain pre-module invoice: PINT AE fields are hidden, the
+    # _post() mandatory-field gate is skipped, the AED currency lock is lifted,
+    # and the move is never send-eligible (no "Submit via TCA Peppol"). Only
+    # consulted for documents WE issue (out_* and self-bills); irrelevant for
+    # inbound and plain vendor bills. copy=False so reversals/duplicates start
+    # fresh at the default ON.
+    tca_create_einvoice = fields.Boolean(
+        string='Create E-Invoice',
+        default=True,
+        copy=False,
+        help='When on, this document is validated and submitted as a UAE PINT AE '
+             'e-invoice via TCA Peppol. Turn off to issue a plain invoice without '
+             'e-invoicing — the PINT AE fields and compliance checks are skipped.',
+    )
+
     # ── Currency lock — AED only for TCA-issued documents ────────────────────
     # UAE PINT AE mandate: every PINT AE document we ISSUE is denominated in
     # AED. No foreign-currency support (no BTAE-20 second-TaxTotal-in-AED
@@ -155,12 +172,12 @@ class AccountMove(models.Model):
     # ('journal_id', 'statement_line_id') so super's logic still re-fires on
     # journal change for non-TCA moves.
     @api.depends('journal_id', 'statement_line_id', 'journal_id.is_self_billing',
-                 'move_type', 'company_id.tca_is_active')
+                 'move_type', 'company_id.tca_is_active', 'tca_create_einvoice')
     def _compute_currency_id(self):
         super()._compute_currency_id()
         aed = self.env.ref('base.AED')
         for move in self:
-            if not move.company_id.tca_is_active:
+            if not (move.company_id.tca_is_active and move.tca_create_einvoice):
                 continue
             is_issued_by_us = (
                 move.move_type in ('out_invoice', 'out_refund')
@@ -1422,6 +1439,7 @@ class AccountMove(models.Model):
         """
         self.ensure_one()
         if not (self.company_id.tca_is_active
+                and self.tca_create_einvoice
                 and self.state == 'posted'
                 and not self.tca_is_inbound
                 and self.tca_move_state in ('not_sent', 'error', 'rejected')):
@@ -2147,6 +2165,7 @@ class AccountMove(models.Model):
             )
             if (
                 move.company_id.tca_is_active
+                and move.tca_create_einvoice
                 and is_issued_by_us
                 and partner_eligible
             ):

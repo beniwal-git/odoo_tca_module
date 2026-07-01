@@ -50,7 +50,7 @@
                  all suppressed for this move (see model gating). Shown only for
                  documents WE issue (out_* / self-bill) under an active TCA
                  company; readonly once posted. -->
-            <xpath expr="//header/button[@name='action_post']" position="after">
+            <xpath expr="//header/button[@name='action_post'][@string='Confirm']" position="after">
                 <div class="o_tca_einvoice_header d-inline-flex align-items-center gap-2"
                      invisible="not tca_company_is_active or tca_is_inbound or (move_type not in ('out_invoice', 'out_refund') and not tca_is_self_billing)">
                     <field name="tca_create_einvoice" widget="boolean_toggle" nolabel="1"

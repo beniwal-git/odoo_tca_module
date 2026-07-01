@@ -174,10 +174,14 @@
                                      credit notes (PaymentMeans suppressed),
                                      optional for Deemed Supply, required
                                      otherwise (ibr-191-ae). -->
+                                <!-- Not view-level required: like the other TCA
+                                     fields, drafts save freely and the ibr-191-ae
+                                     check runs at Confirm (via
+                                     _tca_collect_validation_errors), gated on the
+                                     Create E-Invoice toggle. -->
                                 <field name="tca_payment_means_code"
                                        string="Payment Means Code"
                                        invisible="move_type in ('out_refund', 'in_refund')"
-                                       required="not tca_flag_deemed_supply and move_type not in ('out_refund', 'in_refund')"
                                        placeholder="Required — select payment method"/>
                                 <!-- ibr-142-ae: Delivery address (Street, City,
                                      State) is mandatory when the E-commerce
@@ -186,16 +190,13 @@
                                      clear on untick. -->
                                 <field name="tca_delivery_street"
                                        string="Delivery Street"
-                                       invisible="not tca_flag_ecommerce"
-                                       required="tca_flag_ecommerce"/>
+                                       invisible="not tca_flag_ecommerce"/>
                                 <field name="tca_delivery_city"
                                        string="Delivery City"
-                                       invisible="not tca_flag_ecommerce"
-                                       required="tca_flag_ecommerce"/>
+                                       invisible="not tca_flag_ecommerce"/>
                                 <field name="tca_delivery_state_id"
                                        string="Delivery State / Emirate"
                                        invisible="not tca_flag_ecommerce"
-                                       required="tca_flag_ecommerce"
                                        options="{'no_create': True, 'no_open': True}"/>
                             </group>
                         </div>
@@ -230,7 +231,6 @@
                                 <field name="tca_buyer_beneficiary_id"
                                        string="Beneficiary ID"
                                        invisible="not tca_show_special_flags or not tca_flag_free_trade_zone"
-                                       required="tca_flag_free_trade_zone"
                                        placeholder="Required for Free Trade Zone"/>
                                 <!-- ibr-157-ae: Deemed Supply, Margin Scheme and Summary
                                      Invoice are forbidden on OOS (480 / 81) documents.

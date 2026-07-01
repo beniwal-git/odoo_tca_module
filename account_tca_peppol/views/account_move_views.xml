@@ -50,17 +50,26 @@
                  all suppressed for this move (see model gating). Shown only for
                  documents WE issue (out_* / self-bill) under an active TCA
                  company; readonly once posted. -->
-            <!-- Two action_post buttons exist (hidden "Post" for entries, then
-                 the visible "Confirm" for invoices). Anchor after the 2nd one
-                 (Confirm) so the toggle renders to its right. `string` cannot be
-                 used as an inheritance selector, so match by position. -->
-            <xpath expr="//header/button[@name='action_post'][2]" position="after">
+            <!-- Order the header as: Confirm · Cancel · Create E-Invoice toggle.
+                 Anchor the toggle after the 2nd button_cancel ("Cancel" — the
+                 non-entry variant; the 1st is "Cancel Entry"). On a draft
+                 invoice only Confirm + Cancel are visible (Send/Print are
+                 posted-only), so this yields the requested sequence. `string`
+                 cannot be an inheritance selector, so match by position. -->
+            <xpath expr="//header/button[@name='button_cancel'][2]" position="after">
                 <div class="o_tca_einvoice_header d-inline-flex align-items-center gap-2"
                      invisible="not tca_company_is_active or tca_is_inbound or (move_type not in ('out_invoice', 'out_refund') and not tca_is_self_billing)">
                     <field name="tca_create_einvoice" widget="boolean_toggle" nolabel="1"
                            readonly="state != 'draft'"/>
                     <span>Create E-Invoice (UAE)</span>
                 </div>
+            </xpath>
+
+            <!-- Cancel should always be present on a draft invoice, including a
+                 brand-new unsaved one. Native hides it via `not id`; drop that
+                 so the header button set stays stable. -->
+            <xpath expr="//header/button[@name='button_cancel'][2]" position="attributes">
+                <attribute name="invisible">state != 'draft' or move_type == 'entry'</attribute>
             </xpath>
 
             <xpath expr="//header" position="inside">

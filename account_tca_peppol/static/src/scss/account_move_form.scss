@@ -8,6 +8,26 @@
 // "Out of Scope (Commercial Invoice)" on one line, leaves enough room for
 // the input to show real data without truncation.
 
+// "Create E-Invoice (UAE)" toggle sits in the invoice header beside Confirm.
+// Rendered as a light-purple pill matching the Draft statusbar highlight,
+// with a clear gap from the Confirm button.
+.o_form_view .o_tca_einvoice_header {
+    margin-left: 3rem;                 // wide gap to the right of the Confirm button
+    padding: 4px 12px;
+    border-radius: 16px;
+    background-color: #e9e7fb;         // light purple — same tint as the Draft box
+    border: 1px solid #d6d1f3;
+    color: #5a4b8c;
+    font-weight: 500;
+    line-height: 1.2;
+    white-space: nowrap;
+
+    span {
+        color: #5a4b8c;
+        font-size: 0.8125rem;
+    }
+}
+
 .o_form_view .o_tca_pint_col {
     .o_inner_group {
         // Default (stacked, col-12) — wide label fits long strings on 1 line.

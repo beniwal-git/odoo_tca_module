@@ -44,6 +44,21 @@
             </xpath>
 
             <!-- ── Header buttons: Accept/Reject for inbound invoices ──── -->
+            <!-- Per-document e-invoicing opt-out, placed in the header beside the
+                 Confirm button (gap + light-purple pill matching the Draft
+                 statusbar). Default ON. Off → PINT AE fields/checks/submit are
+                 all suppressed for this move (see model gating). Shown only for
+                 documents WE issue (out_* / self-bill) under an active TCA
+                 company; readonly once posted. -->
+            <xpath expr="//header/button[@name='action_post']" position="after">
+                <div class="o_tca_einvoice_header d-inline-flex align-items-center gap-2"
+                     invisible="not tca_company_is_active or tca_is_inbound or (move_type not in ('out_invoice', 'out_refund') and not tca_is_self_billing)">
+                    <field name="tca_create_einvoice" widget="boolean_toggle" nolabel="1"
+                           readonly="state != 'draft'"/>
+                    <span>Create E-Invoice (UAE)</span>
+                </div>
+            </xpath>
+
             <xpath expr="//header" position="inside">
                 <button name="action_tca_accept_inbound"
                         string="Accept &amp; Post"
@@ -112,17 +127,11 @@
                          static/src/scss/account_move_form.scss sets a fixed 160px label
                          column inside these sections so input cells always have
                          ≥200px (visible 10-digit IDs, emirate codes, etc.). -->
-                    <!-- Per-document e-invoicing opt-out. Subtle toggle, default ON.
-                         Shown only for documents WE issue (out_* or self-bill) under
-                         an active TCA company. Off → the PINT AE fields below vanish,
-                         the _post() mandatory-field gate is skipped, the AED currency
-                         lock lifts, and the move is not "Submit via TCA"-eligible. -->
-                    <div class="d-flex align-items-center gap-2 mb-2 text-muted o_tca_einvoice_toggle"
-                         invisible="not tca_company_is_active or tca_is_inbound or (move_type not in ('out_invoice', 'out_refund') and not tca_is_self_billing)">
-                        <field name="tca_create_einvoice" widget="boolean_toggle" nolabel="1"
-                               readonly="state != 'draft'"/>
-                        <span class="small">Create UAE e-invoice (PINT AE)</span>
-                    </div>
+                    <!-- The Create E-Invoice toggle lives in the header (beside
+                         Confirm). Declared invisible here too so the field is
+                         loaded for the `parent.tca_create_einvoice` line domains
+                         and the invisible conditions below. -->
+                    <field name="tca_create_einvoice" invisible="1"/>
                     <div class="row g-4 mb-3 o_tca_pint_row"
                          invisible="not tca_create_einvoice or (move_type in ('in_invoice', 'in_refund') and not tca_is_self_billing)">
                         <div class="col-12 col-xxl o_tca_pint_col">

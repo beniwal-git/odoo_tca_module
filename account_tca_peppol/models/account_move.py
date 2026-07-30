@@ -2016,6 +2016,11 @@ class AccountMove(models.Model):
     # PINT AE subdivision codes (AUH/DXB/SHJ/AJM/UAQ/RAK/FUJ) — no remap needed.
     _TCA_ZERO_VAT_CATEGORIES = ('Z', 'AE', 'E', 'O')
 
+    # Legal-ID-type codes: our records store the PINT AE/genericode value 'PAS'
+    # for passport, but the ASP JSON schema (§9 trade_license_type) expects
+    # 'PP'. Others (TL/EID/CD) are identical. Map on the way into the JSON.
+    _TCA_JSON_LEGAL_ID_TYPE = {'PAS': 'PP'}
+
     def _tca_json_metadata(self):
         """Layer 1 metadata — the 8 BTAE-02 use-case flags (all mandatory)."""
         self.ensure_one()
@@ -2055,15 +2060,34 @@ class AccountMove(models.Model):
         return f'{UAE_EAS}:{raw}'
 
     def _tca_json_party(self, partner, peppol_id, is_buyer):
-        """Layer 2 party object (§9 sending_party / receiving_party)."""
+        """Layer 2 party object (§9 sending_party / receiving_party).
+
+        For the buyer, invoice-form overrides (tca_buyer_*) win over the
+        partner record — mirrors the XML builder's _tca_resolve_legal_id so a
+        legal id typed on the invoice actually reaches the wire."""
         self.ensure_one()
-        emirate = ''
+
+        # ── Emirate / subdivision ────────────────────────────────────────
         if is_buyer and self.tca_buyer_emirate:
             emirate = self.tca_buyer_emirate
         elif hasattr(partner, '_tca_emirate'):
             emirate = partner._tca_emirate() or ''
         else:
             emirate = partner.tca_emirate or ''
+
+        # ── Legal id (buyer overrides win) ───────────────────────────────
+        if is_buyer:
+            trade_license = self.tca_buyer_trade_license or partner.tca_trade_license or partner.company_registry
+            legal_type = self.tca_buyer_legal_id_type or partner.tca_legal_id_type
+            legal_authority = self.tca_buyer_legal_authority or partner.tca_legal_authority
+            passport_country = (self.tca_buyer_passport_country_id.code
+                                if self.tca_buyer_passport_country_id
+                                else (partner.tca_passport_country_id.code if partner.tca_passport_country_id else ''))
+        else:
+            trade_license = partner.tca_trade_license or partner.company_registry
+            legal_type = partner.tca_legal_id_type
+            legal_authority = partner.tca_legal_authority
+            passport_country = partner.tca_passport_country_id.code if partner.tca_passport_country_id else ''
 
         party = {
             'legal_name': partner.name or '',
@@ -2079,12 +2103,15 @@ class AccountMove(models.Model):
         }
         if partner.vat:
             party['trn'] = partner.vat
-        if partner.tca_trade_license:
-            party['trade_license_id'] = partner.tca_trade_license
-        if partner.tca_legal_id_type:
-            party['trade_license_type'] = partner.tca_legal_id_type
-        if partner.tca_legal_authority:
-            party['trade_license_authority'] = partner.tca_legal_authority
+        if trade_license:
+            party['trade_license_id'] = trade_license
+        if legal_type:
+            # §9 uses PP for passport; our records store PAS.
+            party['trade_license_type'] = self._TCA_JSON_LEGAL_ID_TYPE.get(legal_type, legal_type)
+        if legal_authority:
+            party['trade_license_authority'] = legal_authority
+        if passport_country:
+            party['passport_country'] = passport_country
         if partner.tca_legal_form:
             party['additional_legal_info'] = partner.tca_legal_form
         # Contact (all optional)
@@ -2128,6 +2155,12 @@ class AccountMove(models.Model):
         }
         if cat in ('S', 'N'):
             d['vat_percentage'] = rate
+        if cat == 'E':
+            # §9: vat_exemption_reason_code required when category is E.
+            if vat_tax and vat_tax.tca_exemption_reason_code:
+                d['vat_exemption_reason_code'] = vat_tax.tca_exemption_reason_code
+            if vat_tax and vat_tax.tca_exemption_reason:
+                d['vat_exemption_reason_text'] = vat_tax.tca_exemption_reason
         if commodity in ('G', 'B') and line.tca_hs_code:
             d['hs_code'] = line.tca_hs_code
         if commodity in ('S', 'B') and line.tca_service_accounting_code:
@@ -2214,6 +2247,12 @@ class AccountMove(models.Model):
             detail['accounting_cost'] = self.tca_buyer_accounting_ref
         if self.invoice_payment_term_id:
             detail['payment_terms'] = self.invoice_payment_term_id.name
+        # note (IBT-022) — free text; mandatory when billing_frequency is OTH.
+        if self.narration:
+            # narration is HTML on account.move; strip to plain text.
+            note_text = re.sub(r'<[^>]+>', ' ', self.narration or '').strip()
+            if note_text:
+                detail['note'] = note_text
 
         # FTZ beneficiary id (BTAE-01) lives on receiving_party.
         if self.tca_flag_free_trade_zone and self.tca_buyer_beneficiary_id:
@@ -2255,13 +2294,18 @@ class AccountMove(models.Model):
                 period['billing_frequency'] = self.tca_billing_frequency
             detail['invoice_period'] = period
 
-        # delivery — mandatory when ecommerce or export.
+        # delivery — mandatory when ecommerce or export. Prefer the explicit
+        # tca_delivery_* fields (ecommerce path); fall back to the shipping
+        # partner (the export validator's source) so both use cases resolve.
         if self.tca_flag_ecommerce or self.tca_is_export:
+            ship = self.partner_shipping_id or self.partner_id
             delivery = {'address': {
-                'line1': self.tca_delivery_street or '',
-                'city': self.tca_delivery_city or '',
-                'subdivision': (self.tca_delivery_state_id.code or '') if self.tca_delivery_state_id else '',
-                'country': (buyer.country_id.code or '') if buyer.country_id else '',
+                'line1': self.tca_delivery_street or ship.street or '',
+                'city': self.tca_delivery_city or ship.city or '',
+                'subdivision': (self.tca_delivery_state_id.code if self.tca_delivery_state_id
+                                else (ship.state_id.code if ship.state_id else '')) or '',
+                'country': (ship.country_id.code if ship.country_id
+                            else (buyer.country_id.code if buyer.country_id else '')) or '',
             }}
             if self.tca_delivery_date:
                 delivery['actual_date'] = self.tca_delivery_date.isoformat()

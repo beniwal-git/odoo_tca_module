@@ -1,1 +1,1 @@
-from . import schematron_validator, tca_api
+from . import tca_api

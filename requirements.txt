@@ -1,1 +1,6 @@
-saxonche
+# No external Python dependencies.
+#
+# PINT AE validation is pure-Python (account_move._tca_collect_validation_errors)
+# plus the TCA Access Point's authoritative server-side schematron. The former
+# optional saxonche/Saxon-C local check was removed — its native GraalVM runtime
+# OOM-killed workers on hosted deployments (e.g. odoo.sh).

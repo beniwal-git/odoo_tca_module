@@ -1960,28 +1960,21 @@ class AccountMove(models.Model):
 
     def _tca_validate_xml_pipeline(self):
         """
-        Runs the FULL PINT AE validation pipeline against the rendered XML.
-        Returns a list of error messages (empty = all OK).
+        Renders the PINT AE XML and returns a list of validation error
+        messages (empty = all OK). Same check the Send & Print wizard does.
 
-        Two tiers — same checks the Send & Print wizard does:
-          Tier 1: builder._export_invoice — renders the PINT AE XML and runs
-                  _export_invoice_constraints internally (vals-based PINT AE
-                  rules, ~30 schematron rules replicated in Python). Returns
-                  (xml, errors).
-          Tier 2: saxonche schematron — runs the official PINT AE XSLT against
-                  the rendered XML. Skipped gracefully when saxonche not
-                  installed.
+        Odoo 19: builder._export_invoice builds the node tree, runs
+        _export_invoice_constraints internally — which merges our canonical
+        PINT AE rule set (_tca_collect_validation_errors) into the bis3
+        constraints — and returns (xml, errors). Those Python rules are the
+        authoritative local gate; TCA's Access Point runs the official PINT AE
+        schematron server-side as the final compliance check on submission.
         """
         self.ensure_one()
         errors = []
         builder = self.env['account.edi.xml.ubl_pint_ae']
-
-        # ── Tier 1: render XML + vals-based PINT AE constraints ─────────────
-        # Odoo 19: _export_invoice builds the node tree, runs
-        # _export_invoice_constraints internally, and returns (xml, errors) —
-        # there is no separate _export_invoice_vals entry point any more.
         try:
-            xml_content, build_errors = builder._export_invoice(self)
+            _xml, build_errors = builder._export_invoice(self)
         except Exception as exc:
             _logger.exception('TCA: failed to render PINT AE XML for validation')
             errors.append(_('Internal error rendering PINT AE XML: %s', exc))
@@ -1989,22 +1982,6 @@ class AccountMove(models.Model):
         for be in (build_errors or ()):
             if be:
                 errors.append(str(be).strip())
-
-        # ── Tier 2: schematron on the rendered XML ──────────────────────────
-        sch = self.env['tca.schematron.validator']
-        if xml_content and sch.is_available():
-            try:
-                xml_bytes = xml_content if isinstance(xml_content, bytes) else xml_content.encode()
-                is_cn = self.move_type in ('out_refund', 'in_refund')
-                result = sch.validate_xml(xml_bytes, is_credit_note=is_cn)
-                if not result.get('skipped') and not result.get('valid'):
-                    for fatal in result.get('fatal_errors', []):
-                        msg = fatal.get('message') or fatal.get('rule_id') or 'Schematron error'
-                        errors.append(msg.strip())
-            except Exception as exc:
-                _logger.exception('TCA: schematron validation crashed at post')
-                errors.append(_('Schematron validation crashed: %s', exc))
-
         return errors
 
     def _tca_build_submission_id(self):
@@ -2121,9 +2098,10 @@ class AccountMove(models.Model):
         Two-phase PINT AE flow at Confirm:
           Phase 1 (pre-post): _tca_validate_mandatory_fields — fast Python checks
                               on partner / invoice fields. Fails → no ledger entry.
-          Phase 2 (post-post): _tca_validate_xml_pipeline — full XML constraints +
-                              saxonche schematron, same as Send & Print wizard.
-                              Fails → UserError rolls back the super()._post().
+          Phase 2 (post-post): _tca_validate_xml_pipeline — renders the XML and
+                              runs the full PINT AE constraints, same as the
+                              Send & Print wizard. Fails → UserError rolls back
+                              the super()._post().
 
         After Confirm the document is POSTED in the ledger but NOT yet sent to
         TCA — neither invoices nor credit notes auto-submit. The user clicks

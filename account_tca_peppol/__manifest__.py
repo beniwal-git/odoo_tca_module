@@ -26,15 +26,13 @@
         'account_edi_ubl_cii',
         'l10n_ae',
     ],
-    # saxonche powers PINT AE schematron validation (services/
-    # schematron_validator.py). It is soft-imported — the module still
-    # installs without it, but schematron validation is silently skipped.
-    # Declaring it here surfaces a clear "missing dependency" error at
-    # install time instead of failing quietly. odoo.sh picks it up from
-    # the repo-root requirements.txt.
-    'external_dependencies': {
-        'python': ['saxonche'],
-    },
+    # No external Python dependencies. PINT AE validation runs as pure-Python
+    # rules at Confirm (account_move._tca_collect_validation_errors), and the
+    # TCA Access Point runs the authoritative PINT AE schematron server-side on
+    # submission. (A previous build shipped an optional saxonche/Saxon-C local
+    # schematron re-check; it was removed — the native GraalVM runtime it needs
+    # OOM-killed workers on hosted deployments and added no coverage over the
+    # Python rules + the AP's server-side check.)
     # l10n_ae (UAE chart of accounts) is a hard dependency — tests load the 'ae'
     # chart template, and module operations mid-test are forbidden by Odoo 19's
     # test runner. Making it a depend ensures install before tests run.

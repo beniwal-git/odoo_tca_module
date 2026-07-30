@@ -84,6 +84,40 @@ class TcaPermanentError(TcaError):
     """Request rejected; retrying without changing input will fail identically."""
 
 
+class TcaValidationError(TcaPermanentError):
+    """Synchronous content-validation failure (400) from the inline-JSON invoice
+    endpoint. `tca_field_errors` holds the flattened list of per-field messages
+    for surfacing in the UI (info-icon list); `tca_field_dict` keeps the raw
+    per-field dict as TCA returned it."""
+
+    def __init__(self, message, field_errors=None, field_dict=None):
+        super().__init__(message)
+        self.tca_field_errors = field_errors or []
+        self.tca_field_dict = field_dict or {}
+
+
+def _tca_flatten_field_errors(err, prefix=''):
+    """Flatten a DRF-style nested error structure into ['path: message', ...].
+    Handles dicts (field → errors), lists (index → errors), and leaf strings."""
+    out = []
+    if isinstance(err, dict):
+        for key, val in err.items():
+            path = f'{prefix}.{key}' if prefix else str(key)
+            out.extend(_tca_flatten_field_errors(val, path))
+    elif isinstance(err, (list, tuple)):
+        # A list of leaf strings → attach each to prefix; a list of dicts
+        # (e.g. invoice_lines[]) → index into it.
+        for i, item in enumerate(err):
+            if isinstance(item, (dict, list, tuple)):
+                _p = f'{prefix}[{i}]' if prefix else f'[{i}]'
+                out.extend(_tca_flatten_field_errors(item, _p))
+            else:
+                out.append(f'{prefix}: {item}' if prefix else str(item))
+    else:
+        out.append(f'{prefix}: {err}' if prefix else str(err))
+    return out
+
+
 class TcaApiService(models.AbstractModel):
     """
     Stateless service model providing all TCA API operations.
@@ -322,18 +356,34 @@ class TcaApiService(models.AbstractModel):
     # ──────────────────────────────────────────────────────────────────────────
 
     @api.model
+    def submit_invoice_json(self, company, name, invoice_number, detail):
+        """
+        Inline-JSON submission (ASP JSON schema §9). One call — no S3 upload.
+        POST /api/v1/invoices/  body: { name, invoice_number, detail }
+
+        Validation is SYNCHRONOUS: TCA validates `detail` before returning.
+          201 → validated + queued for Peppol dispatch. Body: { id, ... }.
+          400 → content validation failed; body is a per-field error dict.
+                Surfaced by _execute_request as a TcaValidationError carrying
+                the parsed field errors (see tca_field_errors).
+        Do NOT send source_file_path alongside detail — TCA returns 400.
+
+        Store the returned 'id' as tca_invoice_uuid on the Odoo invoice.
+        """
+        payload = {
+            'name': name,
+            'invoice_number': invoice_number,
+            'detail': detail,
+        }
+        return self._http_post(company, '/api/v1/invoices/', payload, expected_status=201)
+
+    @api.model
     def submit_invoice(self, company, name, invoice_number, source_file_path):
         """
-        Step 3 of the outbound invoice flow.
-        POST /api/v1/invoices/ — register the uploaded document with TCA.
-
-        Fields:
-          name              — display label shown in the TCA portal
-          invoice_number    — unique document number per org (e.g. INV/2025/0001)
-          source_file_path  — S3 URI returned by POST /api/v1/documents/ (get_document_upload_url)
-
-        Returns { id, source, created_at }.
-        Store the 'id' field as tca_invoice_uuid on the Odoo invoice.
+        Legacy XML-upload mode (§5). Registers an already-uploaded S3 document.
+        POST /api/v1/invoices/  body: { name, invoice_number, source_file_path }
+        Async — 201 means received, not validated. Kept for the file-upload
+        path; the inline-JSON mode (submit_invoice_json) is the primary flow.
         """
         payload = {
             'name': name,
@@ -574,6 +624,22 @@ class TcaApiService(models.AbstractModel):
                             req.full_url, inv_num_errs,
                         )
                         return {**err_data, 'tca_duplicate': True}
+                # Inline-JSON content validation (§11.2): a per-field error dict
+                # that isn't a plain {"detail": ...} envelope. Flatten it into
+                # readable "path: message" lines for the UI.
+                if isinstance(err_data, dict) and not err_data.get('detail'):
+                    field_errors = _tca_flatten_field_errors(err_data)
+                    if field_errors:
+                        _logger.error(
+                            'TCA: 400 content validation on %s:\n%s',
+                            req.full_url, '\n'.join(field_errors),
+                        )
+                        raise TcaValidationError(
+                            _('TCA rejected the invoice content (400):\n%s',
+                              '\n'.join(field_errors)),
+                            field_errors=field_errors,
+                            field_dict=err_data,
+                        ) from exc
             if exc.code == 422:
                 raise TcaPermanentError(_('TCA validation error (422): %s', detail)) from exc
 

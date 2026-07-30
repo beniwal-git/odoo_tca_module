@@ -29,7 +29,7 @@ from odoo.addons.account_tca_peppol.constants import (
     UAE_EAS,
     UAE_EMIRATES,
 )
-from odoo.addons.account_tca_peppol.services.tca_api import TcaTransientError
+from odoo.addons.account_tca_peppol.services.tca_api import TcaTransientError, TcaValidationError
 from odoo.exceptions import UserError, ValidationError
 
 _logger = logging.getLogger(__name__)
@@ -2003,68 +2003,324 @@ class AccountMove(models.Model):
         self.ensure_one()
         return f'{self.name}-{uuid.uuid4().hex[:8]}'
 
+    # ──────────────────────────────────────────────────────────────────────────
+    # PINT AE JSON (inline) submission — maps account.move → the TCA `detail`
+    # tree. Key names follow the ASP JSON schema §9 Field Reference (human-
+    # readable snake_case, one field per IBT/BTAE). The backend injects
+    # UUID (BTAE-07), ProfileID/CustomizationID and the VAT tax-scheme codes,
+    # so we never send those. Validation is synchronous: POST /invoices/
+    # returns 400 with a per-field error dict on bad content, 201 on accept.
+    # ──────────────────────────────────────────────────────────────────────────
+
+    # Odoo tca_emirate / partner emirate selection keys already equal the
+    # PINT AE subdivision codes (AUH/DXB/SHJ/AJM/UAQ/RAK/FUJ) — no remap needed.
+    _TCA_ZERO_VAT_CATEGORIES = ('Z', 'AE', 'E', 'O')
+
+    def _tca_json_metadata(self):
+        """Layer 1 metadata — the 8 BTAE-02 use-case flags (all mandatory)."""
+        self.ensure_one()
+        return {
+            'is_ftz': bool(self.tca_flag_free_trade_zone),
+            'is_deemed': bool(self.tca_flag_deemed_supply),
+            'is_margin': bool(self.tca_flag_margin_scheme),
+            'is_summary': bool(self.tca_flag_summary_invoice),
+            'is_continuous': bool(self.tca_flag_continuous_supply),
+            'is_dab': bool(self.tca_flag_disclosed_agent),
+            'is_ecommerce': bool(self.tca_flag_ecommerce),
+            'is_export': bool(self.tca_is_export),
+        }
+
+    def _tca_json_seller_buyer(self):
+        """Return (seller_partner, buyer_partner) in the SEMANTIC sense —
+        seller = supplier (sending_party), buyer = customer (receiving_party).
+        Self-billing swaps who issues but NOT the semantic roles: the peppol_id
+        routing swap is already baked into tca_seller/buyer_participant_id."""
+        self.ensure_one()
+        company_partner = self.company_id.partner_id.commercial_partner_id
+        counterpart = self.partner_id.commercial_partner_id
+        if self.tca_is_self_billing:
+            # We (the buyer/company) issue on the supplier's behalf.
+            return counterpart, company_partner
+        return company_partner, counterpart
+
+    @staticmethod
+    def _tca_json_peppol_id(raw):
+        """Format a participant id as §9 requires: `{scheme}:{identifier}`.
+        Move-level participant ids are stored bare (the XML builder adds the
+        schemeID attribute separately); JSON needs the scheme inline. Default
+        to the UAE EAS (0235) when no scheme is already present."""
+        raw = (raw or '').strip()
+        if not raw or ':' in raw:
+            return raw
+        return f'{UAE_EAS}:{raw}'
+
+    def _tca_json_party(self, partner, peppol_id, is_buyer):
+        """Layer 2 party object (§9 sending_party / receiving_party)."""
+        self.ensure_one()
+        emirate = ''
+        if is_buyer and self.tca_buyer_emirate:
+            emirate = self.tca_buyer_emirate
+        elif hasattr(partner, '_tca_emirate'):
+            emirate = partner._tca_emirate() or ''
+        else:
+            emirate = partner.tca_emirate or ''
+
+        party = {
+            'legal_name': partner.name or '',
+            'peppol_id': self._tca_json_peppol_id(peppol_id),
+            'address': {
+                'line1': partner.street or '',
+                'line2': partner.street2 or '',
+                'city': partner.city or '',
+                'post_code': partner.zip or '',
+                'subdivision': emirate,
+                'country': partner.country_id.code or '',
+            },
+        }
+        if partner.vat:
+            party['trn'] = partner.vat
+        if partner.tca_trade_license:
+            party['trade_license_id'] = partner.tca_trade_license
+        if partner.tca_legal_id_type:
+            party['trade_license_type'] = partner.tca_legal_id_type
+        if partner.tca_legal_authority:
+            party['trade_license_authority'] = partner.tca_legal_authority
+        if partner.tca_legal_form:
+            party['additional_legal_info'] = partner.tca_legal_form
+        # Contact (all optional)
+        contact = {}
+        if partner.name:
+            contact['name'] = partner.name
+        if partner.phone:
+            contact['telephone'] = partner.phone
+        if partner.email:
+            contact['email'] = partner.email
+        if contact:
+            party['contact'] = contact
+        return party
+
+    def _tca_json_line(self, line, seq):
+        """Layer 4 — one invoice_lines[] entry (§9)."""
+        vat_tax = next((t for t in line.tax_ids if t.tca_tax_category), None)
+        cat = vat_tax.tca_tax_category if vat_tax else ''
+        rate = vat_tax.amount if vat_tax else 0.0
+        net = line.price_subtotal
+        # VAT amount must be 0 for Z / AE / E / O per §9 (buyer self-accounts or
+        # no VAT); use the actual line delta otherwise.
+        vat_amt = 0.0 if cat in self._TCA_ZERO_VAT_CATEGORIES else (line.price_total - line.price_subtotal)
+        item_name = line.name or (line.product_id.name if line.product_id else '') or ''
+        commodity = line.tca_effective_commodity_type or ''
+
+        d = {
+            'id': str(seq),
+            'quantity': line.quantity,
+            'uom': line.product_uom_id._get_unece_code() if line.product_uom_id else 'C62',
+            'line_extension_amount': net,
+            'gross_price': line.price_unit,
+            'unit_price': line.price_unit,
+            'base_quantity': 1,
+            'vat_category': cat,
+            'name': item_name,
+            'description': item_name,          # IBT-154 mandatory — mirror name
+            'commodity_code': commodity,
+            'line_amount_aed': net + vat_amt,
+            'vat_amount_aed': vat_amt,
+        }
+        if cat in ('S', 'N'):
+            d['vat_percentage'] = rate
+        if commodity in ('G', 'B') and line.tca_hs_code:
+            d['hs_code'] = line.tca_hs_code
+        if commodity in ('S', 'B') and line.tca_service_accounting_code:
+            d['sac_code'] = line.tca_service_accounting_code
+        if cat == 'AE':
+            # Reverse charge — §9 requires RCM type + a 0160-scheme standard id.
+            if line.tca_rc_description:
+                d['reverse_charge_item_type'] = line.tca_rc_description
+            if line.tca_standard_item_id:
+                d['standard_identifier'] = line.tca_standard_item_id
+                d['standard_identifier_scheme'] = line.tca_standard_item_scheme or '0160'
+        if line.tca_line_note:
+            d['note'] = line.tca_line_note
+        return d
+
+    def _tca_json_lines(self):
+        self.ensure_one()
+        return [
+            self._tca_json_line(line, seq)
+            for seq, line in enumerate(self._tca_product_lines(), start=1)
+        ]
+
+    def _tca_json_vat_breakdown(self):
+        """Layer 5 — one entry per unique (category, rate) across lines."""
+        self.ensure_one()
+        groups = {}
+        for line in self._tca_product_lines():
+            vat_tax = next((t for t in line.tax_ids if t.tca_tax_category), None)
+            cat = vat_tax.tca_tax_category if vat_tax else ''
+            rate = vat_tax.amount if vat_tax else 0.0
+            key = (cat, rate)
+            g = groups.setdefault(key, {
+                'category_code': cat,
+                'vat_rate': rate,
+                'taxable_amount': 0.0,
+                'tax_amount': 0.0,
+            })
+            g['taxable_amount'] += line.price_subtotal
+            if cat not in self._TCA_ZERO_VAT_CATEGORIES:
+                g['tax_amount'] += (line.price_total - line.price_subtotal)
+        return list(groups.values())
+
+    def _tca_json_totals(self):
+        """Layer 5 — invoice_totals (§9)."""
+        self.ensure_one()
+        return {
+            'line_extension_amount': self.amount_untaxed,
+            'tax_exclusive_amount': self.amount_untaxed,
+            'total_vat_amount': self.amount_tax,
+            'tax_inclusive_amount': self.amount_total,
+            'payable_amount': self.amount_total,
+        }
+
+    def _tca_build_json_detail(self):
+        """Build the full PINT AE `detail` tree for the inline-JSON submission
+        mode (ASP JSON schema §9). Returns a plain dict ready to json-encode."""
+        self.ensure_one()
+        is_credit_note = self.tca_invoice_type_code in ('381', '81', '361')
+        seller, buyer = self._tca_json_seller_buyer()
+
+        detail = {
+            'document_identifier': self.name or '',
+            'issue_date': self.invoice_date.isoformat() if self.invoice_date else '',
+            'document_type': self.tca_invoice_type_code or '',
+            'document_currency': self.currency_id.name or 'AED',
+            'metadata': self._tca_json_metadata(),
+            'sending_party': self._tca_json_party(seller, self.tca_seller_participant_id, is_buyer=False),
+            'receiving_party': self._tca_json_party(buyer, self.tca_buyer_participant_id, is_buyer=True),
+            'invoice_lines': self._tca_json_lines(),
+            'vat_breakdown': self._tca_json_vat_breakdown(),
+            'invoice_totals': self._tca_json_totals(),
+        }
+
+        # ── Layer 1 conditional header fields ───────────────────────────────
+        # due_date: required when payable > 0, except credit notes / deemed.
+        if (self.invoice_date_due and self.amount_total > 0
+                and not is_credit_note and not self.tca_flag_deemed_supply):
+            detail['due_date'] = self.invoice_date_due.isoformat()
+        if self.tca_tax_point_date and not is_credit_note:
+            detail['tax_point_date'] = self.tca_tax_point_date.isoformat()
+        if self.tca_buyer_reference:
+            detail['buyer_reference'] = self.tca_buyer_reference
+        if self.tca_buyer_accounting_ref:
+            detail['accounting_cost'] = self.tca_buyer_accounting_ref
+        if self.invoice_payment_term_id:
+            detail['payment_terms'] = self.invoice_payment_term_id.name
+
+        # FTZ beneficiary id (BTAE-01) lives on receiving_party.
+        if self.tca_flag_free_trade_zone and self.tca_buyer_beneficiary_id:
+            detail['receiving_party']['fz_beneficiary_id'] = self.tca_buyer_beneficiary_id
+        # Disclosed-agent principal (BTAE-14) on sending_party.
+        if self.tca_flag_disclosed_agent and self.tca_principal_id:
+            detail['sending_party']['principle_id'] = self.tca_principal_id
+
+        # ── Layer 3 references / periods / delivery / payment ───────────────
+        references = {}
+        if self.tca_contract_reference:
+            references['contract_id'] = self.tca_contract_reference
+        if self.tca_contract_value:
+            references['contract_value'] = self.tca_contract_value
+        if self.tca_project_reference:
+            references['project'] = self.tca_project_reference
+        if self.tca_export_declaration_number:
+            references['customs_ref'] = self.tca_export_declaration_number
+        if is_credit_note and self.tca_credit_note_reason:
+            references['credit_note_reason_code'] = self.tca_credit_note_reason
+        # Preceding invoice(s) — mandatory for credit notes unless reason is VD.
+        if is_credit_note and self.tca_credit_note_reason != 'VD' and self.reversed_entry_id:
+            references['preceding_invoices'] = [{
+                'id': self.reversed_entry_id.name or '',
+                'issue_date': (self.reversed_entry_id.invoice_date.isoformat()
+                               if self.reversed_entry_id.invoice_date else ''),
+            }]
+        if references:
+            detail['references'] = references
+
+        # invoice_period — mandatory when summary; optional otherwise.
+        if self.tca_invoice_period_start or self.tca_invoice_period_end:
+            period = {}
+            if self.tca_invoice_period_start:
+                period['start_date'] = self.tca_invoice_period_start.isoformat()
+            if self.tca_invoice_period_end:
+                period['end_date'] = self.tca_invoice_period_end.isoformat()
+            if self.tca_flag_continuous_supply and self.tca_billing_frequency:
+                period['billing_frequency'] = self.tca_billing_frequency
+            detail['invoice_period'] = period
+
+        # delivery — mandatory when ecommerce or export.
+        if self.tca_flag_ecommerce or self.tca_is_export:
+            delivery = {'address': {
+                'line1': self.tca_delivery_street or '',
+                'city': self.tca_delivery_city or '',
+                'subdivision': (self.tca_delivery_state_id.code or '') if self.tca_delivery_state_id else '',
+                'country': (buyer.country_id.code or '') if buyer.country_id else '',
+            }}
+            if self.tca_delivery_date:
+                delivery['actual_date'] = self.tca_delivery_date.isoformat()
+            if self.tca_incoterms:
+                delivery['incoterms'] = self.tca_incoterms
+            if self.tca_delivery_party_trn:
+                delivery['party_id'] = self.tca_delivery_party_trn
+            detail['delivery'] = delivery
+
+        # payment_means — required for all doc types except credit notes / deemed.
+        if not is_credit_note and not self.tca_flag_deemed_supply and self.tca_payment_means_code:
+            detail['payment_means'] = [{'code': self.tca_payment_means_code}]
+
+        return detail
+
     def _tca_submit_outbound(self):
         """
-        Submit this posted invoice/credit note to TCA Peppol. Atomic: raises
-        UserError on any failure so the caller can rollback super()._post().
+        Submit this invoice/credit note to TCA via the inline-JSON endpoint.
+        Atomic: raises UserError on any failure so the caller can roll back
+        super()._post() — UAE FTA compliance requires TCA to ACCEPT the
+        document before it is recorded in the books.
 
-        Used by `_post()` to chain credit-note submission with Confirm —
-        UAE FTA compliance requires the document to reach the Peppol network
-        before being recorded in the books.
-
-        Generates XML directly from the PINT AE builder (no PDF — the Send &
-        Print wizard remains the path for PDF-attached submission of regular
-        invoices).
+        Single call: POST /api/v1/invoices/ with the PINT AE `detail` tree
+        (no XML build, no S3 upload). Validation is synchronous —
+          201 → validated + queued for Peppol dispatch → mark submitted.
+          400 → per-field content errors → TcaValidationError → UserError
+                with the field list (nothing posted).
+        The backend builds + schematron-validates the UBL server-side.
         """
         self.ensure_one()
         api_svc = self.env['tca.api.service']
         company = self.company_id
 
-        # 1. Generate XML from the PINT AE builder
-        builder = self.env['account.edi.xml.ubl_pint_ae']
-        xml_content, build_errors = builder._export_invoice(self)
-        if build_errors:
-            errs = build_errors if isinstance(build_errors, (list, set, tuple)) else [build_errors]
-            raise UserError(_(
-                'TCA: cannot build PINT AE XML:\n%s', '\n'.join(str(e) for e in errs)
-            ))
-        if not xml_content:
-            raise UserError(_('TCA: PINT AE XML builder returned empty content.'))
-        xml_bytes = xml_content if isinstance(xml_content, bytes) else xml_content.encode()
-        xml_filename = (self.name or 'document').replace('/', '_') + '.xml'
+        # 1. Build the PINT AE detail tree from this move.
+        detail = self._tca_build_json_detail()
 
-        # 2. Build a unique submission ID for THIS attempt (UAE compliance).
+        # 2. Unique submission id for THIS attempt (UAE compliance — a given
+        #    invoice_number is accepted by the network only once).
         submission_id = self._tca_build_submission_id()
 
-        # 3. Get presigned upload URL from TCA
+        # 3. Submit (synchronous validation).
         self.tca_move_state = 'uploading'
-        upload_response = api_svc.get_document_upload_url(company, filename=xml_filename)
-        upload_url = upload_response.get('upload_url')
-        source_file_path = (
-            upload_response.get('path')
-            or upload_response.get('s3_uri')
-            or upload_response.get('s3_path')
-            or upload_response.get('file_key')
-        )
-        if not upload_url or not source_file_path:
+        try:
+            result = api_svc.submit_invoice_json(
+                company=company,
+                name=submission_id,
+                invoice_number=submission_id,
+                detail=detail,
+            )
+        except TcaValidationError as exc:
+            # Content rejected — surface the per-field list; leave unposted.
+            self.tca_move_state = 'error'
+            self.tca_submission_error = '\n'.join(exc.tca_field_errors) or str(exc)
             raise UserError(_(
-                'TCA did not return a valid upload URL. Response: %s', upload_response
-            ))
+                'TCA rejected this invoice — fix these and confirm again:\n\n%s',
+                '\n'.join(f'• {e}' for e in exc.tca_field_errors) or str(exc),
+            )) from exc
 
-        # 4. Upload XML bytes to S3 (presigned)
-        api_svc.upload_to_s3(upload_url, xml_bytes)
-
-        # 5. Register invoice with TCA using the unique submission_id
-        result = api_svc.submit_invoice(
-            company=company,
-            name=submission_id,
-            invoice_number=submission_id,
-            source_file_path=source_file_path,
-        )
-
-        # 6. 409/400-already-exists treated as success (defensive: should not
-        # happen given our unique submission_id, but catches state-desync edge
-        # cases where TCA accepted a prior call we lost track of).
+        # 4. Duplicate (defensive — unique submission_id should prevent it).
         if result.get('tca_duplicate'):
             self.write({
                 'tca_move_state': 'submitted',
@@ -2072,12 +2328,12 @@ class AccountMove(models.Model):
                 'tca_last_submission_id': submission_id,
             })
             self._message_log(body=_(
-                'TCA: document already registered (duplicate detected on submission "%s"). '
+                'TCA: document already registered (duplicate on submission "%s"). '
                 'Status will sync via cron.', submission_id,
             ))
             return True
 
-        # 7. Success — store the TCA id, submission id used, and mark submitted
+        # 5. 201 — validated + queued. Store the TCA id, mark submitted.
         tca_id = result.get('id', '')
         self.write({
             'tca_invoice_uuid': tca_id,
@@ -2086,7 +2342,7 @@ class AccountMove(models.Model):
             'tca_last_submission_id': submission_id,
         })
         self._message_log(body=_(
-            'Submitted to TCA Peppol network on Confirm. '
+            'Submitted to TCA Peppol network (validated on submission). '
             'TCA invoice_number: %(sid)s — TCA ID: %(tid)s',
             sid=submission_id, tid=tca_id,
         ))

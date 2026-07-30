@@ -1886,19 +1886,17 @@ class AccountMove(models.Model):
                     'Line "%s": at least one Tax must be applied.', label,
                 )
                 return errs
-            ct = line.tca_effective_commodity_type
-            # HS Code (IBT-158) check stays — goods/both without HS Code fail
-            # TCA schematron ibr-184-ae / ibr-186-ae loudly. SAC
-            # checks (ibr-185-ae / ibr-186-ae SAC half) are intentionally
-            # not enforced here: per-product user request, we let TCA's own
-            # schematron be the gate on SAC so confirmation is not blocked.
-            if ct in ('G', 'B') and not line.tca_hs_code:
+            has_rc = any(t.tca_tax_category == 'AE' for t in line.tax_ids)
+            # HS Code (IBT-158) is mandatory ONLY under Reverse Charge (RCM).
+            # Business rule: non-RCM goods/services lines do not require an HS
+            # code at confirmation. SAC (BTAE-17) is likewise left to TCA's own
+            # schematron so confirmation is not blocked.
+            if has_rc and not line.tca_hs_code:
                 errs[f'pint_ae_line_hs_{line.id}'] = _(
-                    '[ibr-184-ae] Line "%s": Item type is %s — "HS Code" (IBT-158) is mandatory.',
-                    label, 'Goods' if ct == 'G' else 'Both',
+                    'Line "%s": Reverse Charge line — "HS Code" (IBT-158) is mandatory.',
+                    label,
                 )
                 return errs
-            has_rc = any(t.tca_tax_category == 'AE' for t in line.tax_ids)
             if has_rc and not line.tca_rc_description:
                 errs[f'pint_ae_line_rc_{line.id}'] = _(
                     'Line "%s": Reverse Charge tax — "Goods/Services Type" is mandatory.', label,

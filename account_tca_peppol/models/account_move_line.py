@@ -151,7 +151,8 @@ class AccountMoveLine(models.Model):
                     vals['product_uom_id'] = default_uom.id
         return super().create(vals_list)
 
-    @api.depends('tca_commodity_type', 'product_id', 'product_id.type')
+    @api.depends('tca_commodity_type', 'tca_hs_code', 'tca_service_accounting_code',
+                 'product_id', 'product_id.type')
     def _compute_tca_effective_commodity_type(self):
         for line in self:
             line.tca_effective_commodity_type = (
@@ -160,15 +161,32 @@ class AccountMoveLine(models.Model):
 
     def _get_default_commodity_type(self):
         """
-        Infer commodity type from the product when `tca_commodity_type` is not
-        set. Only explicit service products are mapped to 'S'; everything else
-        — storable products and free-text lines — defaults to 'G' (Goods).
-        Rationale: Odoo's product.type itself defaults to 'consu' (Goods), and
-        the vast majority of B2B invoice lines are goods. Defaulting to 'S'
-        forced every line through the SAC-mandatory branch (ibr-185-ae).
+        Infer commodity type when `tca_commodity_type` is not explicitly set.
+
+        TCA requires every line to be classified: Goods → HS code (IBT-158),
+        Services → SAC (BTAE-17), Both → both. So we infer from the code the
+        user actually entered — providing a SAC means the line is a service,
+        providing an HS code means goods:
+
+          · HS + SAC          → 'B' (Both)
+          · SAC only          → 'S' (Services)
+          · HS only           → 'G' (Goods)
+          · neither, service product → 'S'
+          · neither, otherwise       → 'G' (Odoo product.type defaults to
+                                             'consu' = goods; most B2B lines
+                                             are goods)
+
         Users can still override via the "Commodity (UAE)" column.
         """
         self.ensure_one()
+        has_hs = bool((self.tca_hs_code or '').strip())
+        has_sac = bool((self.tca_service_accounting_code or '').strip())
+        if has_hs and has_sac:
+            return 'B'
+        if has_sac:
+            return 'S'
+        if has_hs:
+            return 'G'
         if self.product_id and self.product_id.type == 'service':
             return 'S'
         return 'G'

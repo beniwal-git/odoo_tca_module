@@ -23,7 +23,11 @@ from base64 import b64encode
 from odoo import _, api, fields, models
 from odoo.addons.account_tca_peppol.constants import (
     ANON_BUYER_PIDS,
+    PINT_AE_CUSTOMIZATION_ID,
     PINT_AE_CUSTOMIZATION_IDS,
+    PINT_AE_PROFILE_ID,
+    PINT_AE_SELFBILLING_CUSTOMIZATION_ID,
+    PINT_AE_SELFBILLING_PROFILE_ID,
     PREDEFINED_EXPORT_NO_PEPPOL,
     PREDEFINED_NOT_SUBJECT,
     UAE_EAS,
@@ -361,20 +365,31 @@ class AccountMove(models.Model):
         shared with the @api.onchange so the rules cannot drift.
         """
         for move in self:
-            current = (move.tca_buyer_participant_id or '').strip()
-            # Preserve user-set values (anything not in the auto-set predefined set).
-            if current and current not in ANON_BUYER_PIDS:
-                continue
             # Inline the self-bill check rather than read move.tca_is_self_billing
             # — another compute may not have run yet under the same trigger.
             is_self_bill = (
                 move.move_type in ('in_invoice', 'in_refund')
                 and move.journal_id.is_self_billing
             )
+            # Self-bill: the buyer is ALWAYS our own organisation and its
+            # electronic address MUST be our TIN — TCA rejects otherwise
+            # ("buyer.electronic_address must match your organization's TIN").
+            # FORCE it; never preserve a stale endpoint left over from when the
+            # move was a plain vendor bill (before the journal was flagged
+            # self-billing), which would leave the vendor's endpoint in the
+            # buyer slot. No legitimate user override exists here.
             if is_self_bill:
                 buyer = move.company_id.partner_id.commercial_partner_id
-            else:
-                buyer = move.partner_id.commercial_partner_id
+                move.tca_buyer_participant_id = self._tca_resolve_buyer_participant_id(
+                    buyer, move.tca_transaction_type_flags,
+                )
+                continue
+            # Non-self-bill: preserve user-set values (anything not in the
+            # auto-set predefined set).
+            current = (move.tca_buyer_participant_id or '').strip()
+            if current and current not in ANON_BUYER_PIDS:
+                continue
+            buyer = move.partner_id.commercial_partner_id
             move.tca_buyer_participant_id = self._tca_resolve_buyer_participant_id(
                 buyer, move.tca_transaction_type_flags,
             )
@@ -401,8 +416,6 @@ class AccountMove(models.Model):
         """
         for move in self:
             current = (move.tca_seller_participant_id or '').strip()
-            if current:
-                continue
             # Inline the self-bill check rather than read move.tca_is_self_billing
             # — another compute may not have run yet under the same trigger.
             is_self_bill = (
@@ -410,9 +423,22 @@ class AccountMove(models.Model):
                 and move.journal_id.is_self_billing
             )
             if is_self_bill:
+                # Seller is the vendor. Drop a stale company endpoint left in
+                # the seller slot from the plain-vendor-bill state (before the
+                # journal was flagged self-billing), but keep a user-typed
+                # fallback for vendors that have no Peppol endpoint of their own.
+                company_ep = (
+                    move.company_id.partner_id.commercial_partner_id.peppol_endpoint or ''
+                ).strip()
+                if current and current != company_ep:
+                    continue
                 seller = move.partner_id.commercial_partner_id
-            else:
-                seller = move.company_id.partner_id.commercial_partner_id
+                move.tca_seller_participant_id = seller.peppol_endpoint or ''
+                continue
+            # Non-self-bill: seller is our company; preserve any user value.
+            if current:
+                continue
+            seller = move.company_id.partner_id.commercial_partner_id
             move.tca_seller_participant_id = seller.peppol_endpoint or ''
 
     # ── PINT AE XML fields ────────────────────────────────────────────────────
@@ -2016,25 +2042,6 @@ class AccountMove(models.Model):
     # PINT AE subdivision codes (AUH/DXB/SHJ/AJM/UAQ/RAK/FUJ) — no remap needed.
     _TCA_ZERO_VAT_CATEGORIES = ('Z', 'AE', 'E', 'O')
 
-    # Legal-ID-type codes: our records store the PINT AE/genericode value 'PAS'
-    # for passport, but the ASP JSON schema (§9 trade_license_type) expects
-    # 'PP'. Others (TL/EID/CD) are identical. Map on the way into the JSON.
-    _TCA_JSON_LEGAL_ID_TYPE = {'PAS': 'PP'}
-
-    def _tca_json_metadata(self):
-        """Layer 1 metadata — the 8 BTAE-02 use-case flags (all mandatory)."""
-        self.ensure_one()
-        return {
-            'is_ftz': bool(self.tca_flag_free_trade_zone),
-            'is_deemed': bool(self.tca_flag_deemed_supply),
-            'is_margin': bool(self.tca_flag_margin_scheme),
-            'is_summary': bool(self.tca_flag_summary_invoice),
-            'is_continuous': bool(self.tca_flag_continuous_supply),
-            'is_dab': bool(self.tca_flag_disclosed_agent),
-            'is_ecommerce': bool(self.tca_flag_ecommerce),
-            'is_export': bool(self.tca_is_export),
-        }
-
     def _tca_json_seller_buyer(self):
         """Return (seller_partner, buyer_partner) in the SEMANTIC sense —
         seller = supplier (sending_party), buyer = customer (receiving_party).
@@ -2075,55 +2082,64 @@ class AccountMove(models.Model):
         else:
             emirate = partner.tca_emirate or ''
 
-        # ── Legal id (buyer overrides win) ───────────────────────────────
+        # Peppol endpoint split into id + scheme (API keeps them separate).
+        raw_pid = self._tca_json_peppol_id(peppol_id)
+        if ':' in raw_pid:
+            eas_scheme, eas_addr = raw_pid.split(':', 1)
+        else:
+            eas_scheme, eas_addr = UAE_EAS, raw_pid
+        # ── Tax identifiers ──────────────────────────────────────────────
+        # TWO distinct ids for a UAE party:
+        #   · vat_identifier (IBT-031) = the 15-digit VAT TRN (1…03) = partner.vat
+        #   · the 10-digit TIN (IBT-032) is the participant id, already carried
+        #     as electronic_address — TCA derives IBT-032 from the 0235 endpoint.
+        vat_identifier = partner.vat or ''
+
+        # ── Legal registration id (IBT-030, buyer overrides win) ─────────
         if is_buyer:
-            trade_license = self.tca_buyer_trade_license or partner.tca_trade_license or partner.company_registry
+            trade_license = (self.tca_buyer_trade_license or partner.tca_trade_license
+                             or partner.company_registry or vat_identifier)
             legal_type = self.tca_buyer_legal_id_type or partner.tca_legal_id_type
             legal_authority = self.tca_buyer_legal_authority or partner.tca_legal_authority
             passport_country = (self.tca_buyer_passport_country_id.code
                                 if self.tca_buyer_passport_country_id
                                 else (partner.tca_passport_country_id.code if partner.tca_passport_country_id else ''))
         else:
-            trade_license = partner.tca_trade_license or partner.company_registry
+            trade_license = partner.tca_trade_license or partner.company_registry or vat_identifier
             legal_type = partner.tca_legal_id_type
             legal_authority = partner.tca_legal_authority
             passport_country = partner.tca_passport_country_id.code if partner.tca_passport_country_id else ''
 
         party = {
-            'legal_name': partner.name or '',
-            'peppol_id': self._tca_json_peppol_id(peppol_id),
-            'address': {
-                'line1': partner.street or '',
-                'line2': partner.street2 or '',
-                'city': partner.city or '',
-                'post_code': partner.zip or '',
-                'subdivision': emirate,
-                'country': partner.country_id.code or '',
-            },
+            'name': partner.name or '',
+            'electronic_address': eas_addr,
+            'electronic_address_scheme': eas_scheme,
+            'address_line_1': partner.street or '',
+            'city': partner.city or '',
+            'country_subdivision': emirate,
+            'country_code': partner.country_id.code or '',
         }
-        if partner.vat:
-            party['trn'] = partner.vat
+        if partner.street2:
+            party['address_line_2'] = partner.street2
+        if partner.zip:
+            party['postal_zone'] = partner.zip
+        if vat_identifier:
+            party['vat_identifier'] = vat_identifier
+            # tax_scheme drives IBT-031-1: must be 'VAT' for a VAT-registered
+            # party so the TRN builds as the VAT PartyTaxScheme (IBT-031). The
+            # 10-digit TIN (IBT-032) is derived from the 0235 endpoint.
+            party['tax_scheme'] = 'VAT'
         if trade_license:
-            party['trade_license_id'] = trade_license
+            party['legal_registration_identifier'] = trade_license
         if legal_type:
-            # §9 uses PP for passport; our records store PAS.
-            party['trade_license_type'] = self._TCA_JSON_LEGAL_ID_TYPE.get(legal_type, legal_type)
+            # API expects the raw UAE codes TL/EID/PAS/CD (our stored values).
+            party['legal_registration_identifier_type'] = legal_type
         if legal_authority:
-            party['trade_license_authority'] = legal_authority
+            party['legal_registration_authority'] = legal_authority
         if passport_country:
             party['passport_country'] = passport_country
         if partner.tca_legal_form:
             party['additional_legal_info'] = partner.tca_legal_form
-        # Contact (all optional)
-        contact = {}
-        if partner.name:
-            contact['name'] = partner.name
-        if partner.phone:
-            contact['telephone'] = partner.phone
-        if partner.email:
-            contact['email'] = partner.email
-        if contact:
-            party['contact'] = contact
         return party
 
     def _tca_json_line(self, line, seq):
@@ -2137,41 +2153,50 @@ class AccountMove(models.Model):
         vat_amt = 0.0 if cat in self._TCA_ZERO_VAT_CATEGORIES else (line.price_total - line.price_subtotal)
         item_name = line.name or (line.product_id.name if line.product_id else '') or ''
         commodity = line.tca_effective_commodity_type or ''
+        # Net unit price (after line discount); Odoo price_unit is pre-discount.
+        net_unit = line.price_unit * (1 - (line.discount or 0.0) / 100.0)
+
+        # vat_info — per-line VAT sub-object (canonical keys from GET record).
+        vat_info = {
+            'vat_category_code': cat,
+            'tax_scheme': 'VAT',
+            'vat_rate': rate,
+        }
+        if cat == 'E':
+            if vat_tax and vat_tax.tca_exemption_reason_code:
+                vat_info['vat_exemption_reason_code'] = vat_tax.tca_exemption_reason_code
+            if vat_tax and vat_tax.tca_exemption_reason:
+                vat_info['vat_exemption_reason_text'] = vat_tax.tca_exemption_reason
 
         d = {
-            'id': str(seq),
-            'quantity': line.quantity,
-            'uom': line.product_uom_id._get_unece_code() if line.product_uom_id else 'C62',
-            'line_extension_amount': net,
-            'gross_price': line.price_unit,
-            'unit_price': line.price_unit,
-            'base_quantity': 1,
-            'vat_category': cat,
-            'name': item_name,
-            'description': item_name,          # IBT-154 mandatory — mirror name
-            'commodity_code': commodity,
-            'line_amount_aed': net + vat_amt,
-            'vat_amount_aed': vat_amt,
+            'line_id': str(seq),
+            'invoiced_quantity': line.quantity,
+            'invoiced_quantity_unit_of_measure_code': (
+                line.product_uom_id._get_unece_code() if line.product_uom_id else 'C62'),
+            'line_net_amount': net,
+            'item_net_price': net_unit,
+            'item_gross_price': line.price_unit,
+            'item_price_base_quantity': 1,
+            'item_name': item_name,
+            'item_description': item_name,     # IBT-154 mandatory — mirror name
+            'item_type': commodity,            # BTAE-13 G/S/B
+            'line_amount_in_aed': net + vat_amt,     # BTAE-10
+            'vat_line_amount_in_aed': vat_amt,       # BTAE-08 (canonical key)
+            'vat_info': [vat_info],
         }
-        if cat in ('S', 'N'):
-            d['vat_percentage'] = rate
-        if cat == 'E':
-            # §9: vat_exemption_reason_code required when category is E.
-            if vat_tax and vat_tax.tca_exemption_reason_code:
-                d['vat_exemption_reason_code'] = vat_tax.tca_exemption_reason_code
-            if vat_tax and vat_tax.tca_exemption_reason:
-                d['vat_exemption_reason_text'] = vat_tax.tca_exemption_reason
+        # HS (goods) / SAC (services) go in their own arrays.
         if commodity in ('G', 'B') and line.tca_hs_code:
-            d['hs_code'] = line.tca_hs_code
+            d['classifications'] = [{'classification_identifier': line.tca_hs_code,
+                                     'classification_identifier_scheme': 'HS'}]
         if commodity in ('S', 'B') and line.tca_service_accounting_code:
-            d['sac_code'] = line.tca_service_accounting_code
+            d['service_accounting_codes'] = [{'code': line.tca_service_accounting_code,
+                                              'scheme_identifier': 'SAC'}]
         if cat == 'AE':
-            # Reverse charge — §9 requires RCM type + a 0160-scheme standard id.
             if line.tca_rc_description:
-                d['reverse_charge_item_type'] = line.tca_rc_description
+                d['type_of_goods_or_services'] = line.tca_rc_description
             if line.tca_standard_item_id:
-                d['standard_identifier'] = line.tca_standard_item_id
-                d['standard_identifier_scheme'] = line.tca_standard_item_scheme or '0160'
+                d['item_standard_identifier'] = line.tca_standard_item_id
+                d['item_standard_identifier_scheme'] = line.tca_standard_item_scheme or '0160'
         if line.tca_line_note:
             d['note'] = line.tca_line_note
         return d
@@ -2193,8 +2218,9 @@ class AccountMove(models.Model):
             rate = vat_tax.amount if vat_tax else 0.0
             key = (cat, rate)
             g = groups.setdefault(key, {
-                'category_code': cat,
-                'vat_rate': rate,
+                'vat_category_code': cat,
+                'tax_scheme_code': 'VAT',
+                'vat_category_rate': rate,
                 'taxable_amount': 0.0,
                 'tax_amount': 0.0,
             })
@@ -2204,14 +2230,14 @@ class AccountMove(models.Model):
         return list(groups.values())
 
     def _tca_json_totals(self):
-        """Layer 5 — invoice_totals (§9)."""
+        """Layer 5 — totals (real API leaf names)."""
         self.ensure_one()
         return {
-            'line_extension_amount': self.amount_untaxed,
-            'tax_exclusive_amount': self.amount_untaxed,
-            'total_vat_amount': self.amount_tax,
-            'tax_inclusive_amount': self.amount_total,
-            'payable_amount': self.amount_total,
+            'sum_of_invoice_line_net_amount': self.amount_untaxed,
+            'invoice_total_amount_without_vat': self.amount_untaxed,
+            'invoice_total_vat_amount': self.amount_tax,
+            'invoice_total_amount_with_vat': self.amount_total,
+            'amount_due_for_payment': self.amount_total,
         }
 
     def _tca_build_json_detail(self):
@@ -2219,26 +2245,36 @@ class AccountMove(models.Model):
         mode (ASP JSON schema §9). Returns a plain dict ready to json-encode."""
         self.ensure_one()
         is_credit_note = self.tca_invoice_type_code in ('381', '81', '361')
+        is_selfbill = self.tca_is_self_billing
         seller, buyer = self._tca_json_seller_buyer()
 
+        # Transaction-type code — the 8-char BTAE-02 binary string (reuse the
+        # builder's logic so the export bit is auto-set from buyer country).
+        builder = self.env['account.edi.xml.ubl_pint_ae']
+        transaction_type_code = builder._get_profile_execution_id(self)
+
         detail = {
-            'document_identifier': self.name or '',
             'issue_date': self.invoice_date.isoformat() if self.invoice_date else '',
-            'document_type': self.tca_invoice_type_code or '',
-            'document_currency': self.currency_id.name or 'AED',
-            'metadata': self._tca_json_metadata(),
-            'sending_party': self._tca_json_party(seller, self.tca_seller_participant_id, is_buyer=False),
-            'receiving_party': self._tca_json_party(buyer, self.tca_buyer_participant_id, is_buyer=True),
-            'invoice_lines': self._tca_json_lines(),
-            'vat_breakdown': self._tca_json_vat_breakdown(),
-            'invoice_totals': self._tca_json_totals(),
+            'invoice_type_code': self.tca_invoice_type_code or '',
+            'transaction_type_code': transaction_type_code,
+            'invoice_currency_code': self.currency_id.name or 'AED',
+            'process_control': {
+                'profile_id': PINT_AE_SELFBILLING_PROFILE_ID if is_selfbill else PINT_AE_PROFILE_ID,
+                'customization_id': (PINT_AE_SELFBILLING_CUSTOMIZATION_ID if is_selfbill
+                                     else PINT_AE_CUSTOMIZATION_ID),
+            },
+            'seller': self._tca_json_party(seller, self.tca_seller_participant_id, is_buyer=False),
+            'buyer': self._tca_json_party(buyer, self.tca_buyer_participant_id, is_buyer=True),
+            'lines': self._tca_json_lines(),
+            'vat_breakdowns': self._tca_json_vat_breakdown(),
+            'totals': self._tca_json_totals(),
         }
 
         # ── Layer 1 conditional header fields ───────────────────────────────
         # due_date: required when payable > 0, except credit notes / deemed.
         if (self.invoice_date_due and self.amount_total > 0
                 and not is_credit_note and not self.tca_flag_deemed_supply):
-            detail['due_date'] = self.invoice_date_due.isoformat()
+            detail['payment_due_date'] = self.invoice_date_due.isoformat()
         if self.tca_tax_point_date and not is_credit_note:
             detail['tax_point_date'] = self.tca_tax_point_date.isoformat()
         if self.tca_buyer_reference:
@@ -2256,10 +2292,10 @@ class AccountMove(models.Model):
 
         # FTZ beneficiary id (BTAE-01) lives on receiving_party.
         if self.tca_flag_free_trade_zone and self.tca_buyer_beneficiary_id:
-            detail['receiving_party']['fz_beneficiary_id'] = self.tca_buyer_beneficiary_id
-        # Disclosed-agent principal (BTAE-14) on sending_party.
+            detail['buyer']['fz_beneficiary_id'] = self.tca_buyer_beneficiary_id
+        # Disclosed-agent principal (BTAE-14) on the seller.
         if self.tca_flag_disclosed_agent and self.tca_principal_id:
-            detail['sending_party']['principle_id'] = self.tca_principal_id
+            detail['seller']['principle_id'] = self.tca_principal_id
 
         # ── Layer 3 references / periods / delivery / payment ───────────────
         references = {}
@@ -2315,11 +2351,32 @@ class AccountMove(models.Model):
                 delivery['party_id'] = self.tca_delivery_party_trn
             detail['delivery'] = delivery
 
-        # payment_means — required for all doc types except credit notes / deemed.
+        # payment_instructions — required for all doc types except credit
+        # notes / deemed supply. IBT-081 payment means type code.
         if not is_credit_note and not self.tca_flag_deemed_supply and self.tca_payment_means_code:
-            detail['payment_means'] = [{'code': self.tca_payment_means_code}]
+            detail['payment_instructions'] = [{'payment_means_type_code': self.tca_payment_means_code}]
 
-        return detail
+        # Strip empty strings / None / empty containers so TCA does not render
+        # empty UBL elements (schematron ibr-079). Numeric 0 / 0.0 is KEPT —
+        # e.g. a zero VAT line amount in AED (BTAE-08) must stay present.
+        return self._tca_prune_empty(detail)
+
+    @staticmethod
+    def _tca_prune_empty(value):
+        """Recursively drop '' / None / empty dict / empty list from a JSON
+        structure. Keeps 0, 0.0 and False (meaningful values)."""
+        if isinstance(value, dict):
+            out = {}
+            for k, v in value.items():
+                pv = AccountMove._tca_prune_empty(v)
+                if pv is None or pv == '' or pv == {} or pv == []:
+                    continue
+                out[k] = pv
+            return out
+        if isinstance(value, (list, tuple)):
+            out = [AccountMove._tca_prune_empty(v) for v in value]
+            return [v for v in out if not (v is None or v == '' or v == {} or v == [])]
+        return value
 
     def _tca_submit_outbound(self):
         """

@@ -624,22 +624,31 @@ class TcaApiService(models.AbstractModel):
                             req.full_url, inv_num_errs,
                         )
                         return {**err_data, 'tca_duplicate': True}
-                # Inline-JSON content validation (§11.2): a per-field error dict
-                # that isn't a plain {"detail": ...} envelope. Flatten it into
-                # readable "path: message" lines for the UI.
-                if isinstance(err_data, dict) and not err_data.get('detail'):
-                    field_errors = _tca_flatten_field_errors(err_data)
-                    if field_errors:
-                        _logger.error(
-                            'TCA: 400 content validation on %s:\n%s',
-                            req.full_url, '\n'.join(field_errors),
-                        )
-                        raise TcaValidationError(
-                            _('TCA rejected the invoice content (400):\n%s',
-                              '\n'.join(field_errors)),
-                            field_errors=field_errors,
-                            field_dict=err_data,
-                        ) from exc
+                # Inline-JSON content validation: per-field error tree. TCA may
+                # return it at the top level ({"lines": [...]}) OR wrapped in a
+                # "detail" envelope ({"detail": {"lines": [...]}}). Only a plain
+                # string detail (e.g. "permission denied") is NOT a field tree.
+                if isinstance(err_data, dict):
+                    d = err_data.get('detail')
+                    if isinstance(d, (dict, list)):
+                        err_tree = d
+                    elif d is None:
+                        err_tree = err_data
+                    else:
+                        err_tree = None  # detail is a plain string message
+                    if err_tree is not None:
+                        field_errors = _tca_flatten_field_errors(err_tree)
+                        if field_errors:
+                            _logger.error(
+                                'TCA: 400 content validation on %s:\n%s',
+                                req.full_url, '\n'.join(field_errors),
+                            )
+                            raise TcaValidationError(
+                                _('TCA rejected the invoice content (400):\n%s',
+                                  '\n'.join(field_errors)),
+                                field_errors=field_errors,
+                                field_dict=err_data,
+                            ) from exc
             if exc.code == 422:
                 raise TcaPermanentError(_('TCA validation error (422): %s', detail)) from exc
 

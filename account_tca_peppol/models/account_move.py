@@ -28,10 +28,9 @@ from odoo.addons.account_tca_peppol.constants import (
     PINT_AE_PROFILE_ID,
     PINT_AE_SELFBILLING_CUSTOMIZATION_ID,
     PINT_AE_SELFBILLING_PROFILE_ID,
-    PREDEFINED_EXPORT_NO_PEPPOL,
-    PREDEFINED_NOT_SUBJECT,
     UAE_EAS,
     UAE_EMIRATES,
+    UAE_STATE_CODE_TO_EMIRATE,
 )
 from odoo.addons.account_tca_peppol.services.tca_api import TcaTransientError, TcaValidationError
 from odoo.exceptions import UserError, ValidationError
@@ -301,12 +300,11 @@ class AccountMove(models.Model):
         so the routing rules live in exactly one place.
 
         Routing precedence:
-          1. Deemed Supply flag set (BTAE-02 pos 2)         → 9900000097
-          2. UAE buyer                                      → peppol_endpoint (or '')
-          3. Foreign buyer + Export flag set (BTAE-02 pos 8)→ 9900000099
-          4. Foreign buyer (no special flag)                → 9900000098
-          5. Partner without country                        → ''
-
+          1. Deemed Supply OR Export flag set (BTAE-02 pos 2 / pos 8)
+                                                      → '' (user fills manually)
+          2. Partner without country                 → ''
+          3. Non-UAE (foreign) party                 → '' (off Peppol; manual)
+          4. UAE party                               → peppol_endpoint (or '')
 
         Args:
             partner:  res.partner record (typically the commercial_partner_id)
@@ -317,27 +315,24 @@ class AccountMove(models.Model):
         """
         flags = (flags or '00000000').ljust(8, '0')
 
-        # (1) Deemed Supply — buyer is unknown to us; leave blank so the
-        # user types the FTA-assigned predefined endpoint (typically
-        # 9900000097) manually on the invoice.
-        if flags[1] == '1':
+        # (1) Deemed Supply (pos 2) or Export (pos 8) — the counterparty is off
+        # the UAE Peppol network. Leave blank so the user enters the Participant
+        # ID manually (Deemed: typically 9900000097; Export: the foreign ID).
+        if flags[1] == '1' or flags[7] == '1':
             return ''
 
         if not partner.country_id:
             return ''
 
-        if partner._tca_is_uae_party():
-            # (2) UAE buyer — 10-digit Peppol Participant ID only. Do NOT
-            # fall back to vat (TRN is a 15-digit tax identifier, not a
-            # Peppol routing endpoint). Missing endpoint surfaces at
-            # post-time validation.
-            return partner.peppol_endpoint or ''
+        # (3) Non-UAE party — off the UAE Peppol network. Leave blank for the
+        # user to enter the Participant ID manually (no auto endpoint).
+        if not partner._tca_is_uae_party():
+            return ''
 
-        if flags[7] == '1':
-            # (3) Export, receiver not registered in Peppol
-            return PREDEFINED_EXPORT_NO_PEPPOL
-        # (4) Foreign buyer not otherwise subject to UAE e-invoicing
-        return PREDEFINED_NOT_SUBJECT
+        # (4) UAE party — 10-digit Peppol Participant ID. Do NOT fall back to
+        # vat (the TRN is a 15-digit tax id, not a routing endpoint). Missing
+        # endpoint surfaces at post-time validation.
+        return partner.peppol_endpoint or ''
 
     @api.depends(
         'partner_id', 'partner_id.peppol_endpoint', 'partner_id.country_id',
@@ -384,10 +379,12 @@ class AccountMove(models.Model):
                     buyer, move.tca_transaction_type_flags,
                 )
                 continue
-            # Non-self-bill: preserve user-set values (anything not in the
-            # auto-set predefined set).
+            # Non-self-bill: preserve ANY user-set value. We no longer auto-set
+            # FTA predefined endpoints (foreign buyers resolve to '' for the
+            # user to fill), so a non-blank value is always the user's — never
+            # overwrite it, even if it happens to be a predefined 9900000xxx.
             current = (move.tca_buyer_participant_id or '').strip()
-            if current and current not in ANON_BUYER_PIDS:
+            if current:
                 continue
             buyer = move.partner_id.commercial_partner_id
             move.tca_buyer_participant_id = self._tca_resolve_buyer_participant_id(
@@ -481,6 +478,12 @@ class AccountMove(models.Model):
         string='E-commerce', copy=True,
         help='Tick for online-channel transactions (BTAE-02 position 7).',
     )
+    tca_flag_export = fields.Boolean(
+        string='Export', copy=True,
+        help='Tick for an export supply to a buyer outside the UAE '
+             '(BTAE-02 position 8). The counterparty is off the UAE Peppol '
+             'network, so enter their Participant ID manually.',
+    )
 
     # ── Section expand/collapse toggle ────────────────────────────────────────
     # Acts as the "expand" switch for the Transaction Type (Optional) group.
@@ -500,7 +503,7 @@ class AccountMove(models.Model):
         'tca_flag_free_trade_zone', 'tca_flag_deemed_supply',
         'tca_flag_margin_scheme', 'tca_flag_summary_invoice',
         'tca_flag_continuous_supply', 'tca_flag_disclosed_agent',
-        'tca_flag_ecommerce',
+        'tca_flag_ecommerce', 'tca_flag_export',
     )
     def _compute_tca_show_special_flags(self):
         """Auto-expand the section whenever any flag is on. Preserves a
@@ -515,6 +518,7 @@ class AccountMove(models.Model):
                 move.tca_flag_continuous_supply,
                 move.tca_flag_disclosed_agent,
                 move.tca_flag_ecommerce,
+                move.tca_flag_export,
             )):
                 move.tca_show_special_flags = True
             elif not move.tca_show_special_flags:
@@ -543,11 +547,12 @@ class AccountMove(models.Model):
         'tca_flag_continuous_supply',
         'tca_flag_disclosed_agent',
         'tca_flag_ecommerce',
+        'tca_flag_export',
     )
     def _compute_tca_transaction_type_flags(self):
-        """Compose the 8-char BTAE-02 string from the 7 user-facing booleans.
-        The export bit (position 8) is always '0' here — the XML builder forces
-        it to '1' when the buyer's country is not AE."""
+        """Compose the 8-char BTAE-02 string from the 8 user-facing booleans.
+        Export (position 8) is a manual choice like the others — the user ticks
+        it for a supply to a buyer outside the UAE."""
         for move in self:
             move.tca_transaction_type_flags = ''.join((
                 '1' if move.tca_flag_free_trade_zone else '0',
@@ -557,7 +562,7 @@ class AccountMove(models.Model):
                 '1' if move.tca_flag_continuous_supply else '0',
                 '1' if move.tca_flag_disclosed_agent else '0',
                 '1' if move.tca_flag_ecommerce else '0',
-                '0',  # Export — auto-set by XML builder
+                '1' if move.tca_flag_export else '0',  # Export (BTAE-02 pos 8)
             ))
 
     tca_credit_note_reason = fields.Selection(
@@ -584,7 +589,7 @@ class AccountMove(models.Model):
     tca_is_continuous = fields.Boolean(
         compute='_compute_tca_derived_flag_booleans',
     )
-    # tca_is_export now derives from buyer country (export auto-detected)
+    # tca_is_export mirrors the manual Export flag (BTAE-02 pos 8).
     tca_is_export = fields.Boolean(compute='_compute_tca_is_export')
     tca_buyer_is_uae = fields.Boolean(compute='_compute_tca_buyer_is_uae')
 
@@ -600,15 +605,12 @@ class AccountMove(models.Model):
                 move.tca_flag_summary_invoice or move.tca_flag_continuous_supply
             )
 
-    @api.depends('partner_id', 'partner_id.country_id')
+    @api.depends('tca_flag_export')
     def _compute_tca_is_export(self):
-        """Export is determined by the buyer's country, not by a user flag.
-        Foreign buyer ⇒ export ⇒ Export Declaration Number field becomes visible."""
+        """Export is a manual user choice (BTAE-02 pos 8). Ticking it reveals
+        the Export Declaration Number field and sets the export bit."""
         for move in self:
-            partner = move.partner_id.commercial_partner_id
-            move.tca_is_export = bool(
-                partner and partner.country_id and partner.country_id.code != 'AE'
-            )
+            move.tca_is_export = move.tca_flag_export
 
     @api.depends('partner_id', 'partner_id.commercial_partner_id.country_id')
     def _compute_tca_buyer_is_uae(self):
@@ -1289,6 +1291,11 @@ class AccountMove(models.Model):
             # (e.g. partner has no country yet — common during draft creation).
             if resolved or not current_pid:
                 self.tca_buyer_participant_id = resolved
+        elif buyer_party.country_id and not buyer_party._tca_is_uae_party():
+            # Switched to a foreign counterparty — clear the stale auto-filled
+            # endpoint left from a previous UAE partner. The buyer is off the
+            # UAE Peppol network, so the user enters the ID manually.
+            self.tca_buyer_participant_id = ''
 
         # ── Buyer Emirate ─────────────────────────────────────────────────────
         if not self.tca_buyer_emirate:
@@ -1415,6 +1422,37 @@ class AccountMove(models.Model):
             else self.partner_id.commercial_partner_id
         )
         self.tca_buyer_participant_id = (buyer.peppol_endpoint or '') if buyer else ''
+
+    @api.onchange('tca_flag_export')
+    def _onchange_tca_flag_export(self):
+        """Sync the counterparty's Participant ID to the Export flag.
+
+          · Export ON  → clear it. The counterparty is outside the UAE (off the
+            Peppol network); the user enters its Participant ID manually.
+          · Export OFF → re-fill from the counterparty's peppol_endpoint.
+
+        The counterparty is the customer on a normal invoice, or the vendor
+        (seller slot) on a self-bill — the self-bill buyer is our own UAE
+        company and is left untouched.
+        """
+        is_self_bill = (
+            self.move_type in ('in_invoice', 'in_refund')
+            and self.journal_id.is_self_billing
+        )
+        if is_self_bill:
+            # Counterparty sits in the SELLER slot (the vendor).
+            if self.tca_flag_export:
+                self.tca_seller_participant_id = ''
+            else:
+                vendor = self.partner_id.commercial_partner_id
+                self.tca_seller_participant_id = (vendor.peppol_endpoint or '') if vendor else ''
+        else:
+            # Counterparty is the customer (buyer slot).
+            if self.tca_flag_export:
+                self.tca_buyer_participant_id = ''
+            else:
+                buyer = self.partner_id.commercial_partner_id
+                self.tca_buyer_participant_id = (buyer.peppol_endpoint or '') if buyer else ''
 
     # ──────────────────────────────────────────────────────────────────────────
     # COMPUTED HELPERS
@@ -1928,6 +1966,23 @@ class AccountMove(models.Model):
                     'Line "%s": Reverse Charge tax — "Goods/Services Type" is mandatory.', label,
                 )
                 return errs
+            # Exempt (E) line MUST carry a VAT exemption reason code (IBT-186,
+            # schematron ibr-167-ae). Accept it either on the line (override)
+            # or on the tax record — the JSON builder uses the same precedence.
+            exempt_tax = next(
+                (t for t in line.tax_ids if t.tca_tax_category == 'E'), None,
+            )
+            if exempt_tax:
+                reason = (line.tca_vat_exemption_reason_code or '').strip() or (
+                    exempt_tax.tca_exemption_reason_code or '')
+                if not reason:
+                    errs[f'pint_ae_line_exempt_reason_{line.id}'] = _(
+                        '[ibr-167-ae] Line "%s": this line is Exempt (E) — a '
+                        '"VAT Exemption Reason Code" is required. Enter it on '
+                        'the line, or set a default on the tax "%s".',
+                        label, exempt_tax.name,
+                    )
+                    return errs
 
         type_code = self.tca_invoice_type_code or ''
         if type_code in ('480', '81'):
@@ -2041,6 +2096,10 @@ class AccountMove(models.Model):
     # Odoo tca_emirate / partner emirate selection keys already equal the
     # PINT AE subdivision codes (AUH/DXB/SHJ/AJM/UAQ/RAK/FUJ) — no remap needed.
     _TCA_ZERO_VAT_CATEGORIES = ('Z', 'AE', 'E', 'O')
+    # Categories where the VAT RATE (IBT-152 / IBT-119) must be ABSENT entirely,
+    # not zero — schematron ibr-119-ae / aligned-ibrp-e-05. Note Z and AE still
+    # require a rate (0 and 5), so they are NOT in this set.
+    _TCA_NO_RATE_CATEGORIES = ('E', 'O')
 
     def _tca_json_seller_buyer(self):
         """Return (seller_partner, buyer_partner) in the SEMANTIC sense —
@@ -2160,11 +2219,17 @@ class AccountMove(models.Model):
         vat_info = {
             'vat_category_code': cat,
             'tax_scheme': 'VAT',
-            'vat_rate': rate,
         }
+        # VAT rate (IBT-152) must be ABSENT for E/O — ibr-119-ae. Present
+        # (incl. 0) for S/Z/AE/N.
+        if cat not in self._TCA_NO_RATE_CATEGORIES:
+            vat_info['vat_rate'] = rate
         if cat == 'E':
-            if vat_tax and vat_tax.tca_exemption_reason_code:
-                vat_info['vat_exemption_reason_code'] = vat_tax.tca_exemption_reason_code
+            # Per-line override wins; fall back to the reason code on the tax.
+            reason_code = (line.tca_vat_exemption_reason_code or '').strip() or (
+                vat_tax.tca_exemption_reason_code if vat_tax else '')
+            if reason_code:
+                vat_info['vat_exemption_reason_code'] = reason_code
             if vat_tax and vat_tax.tca_exemption_reason:
                 vat_info['vat_exemption_reason_text'] = vat_tax.tca_exemption_reason
 
@@ -2181,9 +2246,12 @@ class AccountMove(models.Model):
             'item_description': item_name,     # IBT-154 mandatory — mirror name
             'item_type': commodity,            # BTAE-13 G/S/B
             'line_amount_in_aed': net + vat_amt,     # BTAE-10
-            'vat_line_amount_in_aed': vat_amt,       # BTAE-08 (canonical key)
             'vat_info': [vat_info],
         }
+        # BTAE-08 (VAT line amount) must be ABSENT on Exempt lines — schematron
+        # ibr-163-ae. Emit it for every other category (0 is valid for Z/O/AE).
+        if cat != 'E':
+            d['vat_line_amount_in_aed'] = vat_amt   # BTAE-08 (canonical key)
         # HS (goods) / SAC (services) go in their own arrays.
         if commodity in ('G', 'B') and line.tca_hs_code:
             d['classifications'] = [{'classification_identifier': line.tca_hs_code,
@@ -2220,10 +2288,12 @@ class AccountMove(models.Model):
             g = groups.setdefault(key, {
                 'vat_category_code': cat,
                 'tax_scheme_code': 'VAT',
-                'vat_category_rate': rate,
                 'taxable_amount': 0.0,
                 'tax_amount': 0.0,
             })
+            # VAT category rate (IBT-119) must be ABSENT for E/O — ibr-119-ae.
+            if cat not in self._TCA_NO_RATE_CATEGORIES:
+                g['vat_category_rate'] = rate
             g['taxable_amount'] += line.price_subtotal
             if cat not in self._TCA_ZERO_VAT_CATEGORIES:
                 g['tax_amount'] += (line.price_total - line.price_subtotal)
@@ -2290,12 +2360,18 @@ class AccountMove(models.Model):
             if note_text:
                 detail['note'] = note_text
 
-        # FTZ beneficiary id (BTAE-01) lives on receiving_party.
+        # FTZ beneficiary id (BTAE-01) lives on the buyer party. The API's
+        # canonical key is `beneficiary_identifier` (confirmed against the GET
+        # record) — an earlier `fz_beneficiary_id` was silently ignored as an
+        # unknown field, leaving BTAE-01 empty and tripping ibr-007-ae.
         if self.tca_flag_free_trade_zone and self.tca_buyer_beneficiary_id:
-            detail['buyer']['fz_beneficiary_id'] = self.tca_buyer_beneficiary_id
-        # Disclosed-agent principal (BTAE-14) on the seller.
+            detail['buyer']['beneficiary_identifier'] = self.tca_buyer_beneficiary_id
+        # Disclosed-agent principal (BTAE-14). The real API key is
+        # `principal_identifier` at the DETAIL ROOT (per the field-reference
+        # doc + TCA's own error text). The stale §9 docx's `principle_id` on
+        # sending_party is silently dropped → "Missing principal identifier".
         if self.tca_flag_disclosed_agent and self.tca_principal_id:
-            detail['seller']['principle_id'] = self.tca_principal_id
+            detail['principal_identifier'] = self.tca_principal_id
 
         # ── Layer 3 references / periods / delivery / payment ───────────────
         references = {}
@@ -2319,37 +2395,73 @@ class AccountMove(models.Model):
         if references:
             detail['references'] = references
 
-        # invoice_period — mandatory when summary; optional otherwise.
-        if self.tca_invoice_period_start or self.tca_invoice_period_end:
-            period = {}
-            if self.tca_invoice_period_start:
-                period['start_date'] = self.tca_invoice_period_start.isoformat()
-            if self.tca_invoice_period_end:
-                period['end_date'] = self.tca_invoice_period_end.isoformat()
-            if self.tca_flag_continuous_supply and self.tca_billing_frequency:
-                period['billing_frequency'] = self.tca_billing_frequency
-            detail['invoice_period'] = period
+        # NOTE: the invoicing period (IBG-14) is NOT a root-level object — it
+        # nests under `delivery` (detail.delivery.invoicing_period). Built after
+        # the delivery block below so it merges into the same container.
 
         # delivery — mandatory when ecommerce or export. Prefer the explicit
         # tca_delivery_* fields (ecommerce path); fall back to the shipping
         # partner (the export validator's source) so both use cases resolve.
         if self.tca_flag_ecommerce or self.tca_is_export:
             ship = self.partner_shipping_id or self.partner_id
+            # Canonical delivery keys (field-reference doc: detail.delivery.*):
+            # address_line_1 / city / country_subdivision / country_code,
+            # actual_delivery_date, party_identifier — NOT line1/subdivision/
+            # country/actual_date/party_id (those are silently dropped, and
+            # country_code then reads as missing → "This field is required").
+            # Emirate code (ibr-128-ae): map Odoo state code → PINT AE code.
+            # Prefer the delivery-state override, else the ship partner's emirate.
+            if self.tca_delivery_state_id:
+                sub = UAE_STATE_CODE_TO_EMIRATE.get(
+                    self.tca_delivery_state_id.code, self.tca_delivery_state_id.code)
+            else:
+                sub = ship._tca_emirate() if ship else ''
             delivery = {'address': {
-                'line1': self.tca_delivery_street or ship.street or '',
+                'address_line_1': self.tca_delivery_street or ship.street or '',
                 'city': self.tca_delivery_city or ship.city or '',
-                'subdivision': (self.tca_delivery_state_id.code if self.tca_delivery_state_id
-                                else (ship.state_id.code if ship.state_id else '')) or '',
-                'country': (ship.country_id.code if ship.country_id
-                            else (buyer.country_id.code if buyer.country_id else '')) or '',
+                'country_subdivision': sub or '',
+                'country_code': (ship.country_id.code if ship.country_id
+                                 else (buyer.country_id.code if buyer.country_id else '')) or '',
             }}
             if self.tca_delivery_date:
-                delivery['actual_date'] = self.tca_delivery_date.isoformat()
+                delivery['actual_delivery_date'] = self.tca_delivery_date.isoformat()
             if self.tca_incoterms:
                 delivery['incoterms'] = self.tca_incoterms
             if self.tca_delivery_party_trn:
-                delivery['party_id'] = self.tca_delivery_party_trn
+                delivery['party_identifier'] = self.tca_delivery_party_trn
             detail['delivery'] = delivery
+
+        # invoicing_period (IBG-14) — mandatory when Summary; also Continuous.
+        # TEMP PROBE: the exact JSON key TCA reads is unknown — three internal
+        # docs disagree and every single-shape attempt has failed ibr-138-ae
+        # (root `invoice_period{start_date,end_date}`, root flat
+        # `invoice_period_*`, and delivery.invoicing_period with prefixed
+        # subkeys — all confirmed dead via the live outgoing dump). Period keys
+        # are tolerated as unknowns (submissions 201'd, not 400'd), so emit the
+        # period under EVERY remaining plausible key at once. Whichever TCA's
+        # mapper reads makes InvoicePeriod appear → ibr-138-ae clears. Once it
+        # passes, GET the record and NARROW to the single winning key.
+        if self.tca_invoice_period_start or self.tca_invoice_period_end:
+            s = self.tca_invoice_period_start.isoformat() if self.tca_invoice_period_start else ''
+            e = self.tca_invoice_period_end.isoformat() if self.tca_invoice_period_end else ''
+            obj = {}
+            if s:
+                obj['start_date'] = s
+            if e:
+                obj['end_date'] = e
+            freq = (self.tca_billing_frequency
+                    if self.tca_flag_continuous_supply and self.tca_billing_frequency else '')
+            if freq:
+                obj['frequency_of_billing'] = freq
+            # (1) root nested, short subkeys (matches process_control/references style)
+            detail['invoicing_period'] = dict(obj)
+            # (2) root flat, "invoicing" prefix (mirrors line-level line_period_start_date)
+            if s:
+                detail['invoicing_period_start_date'] = s
+            if e:
+                detail['invoicing_period_end_date'] = e
+            # (3) under delivery, short subkeys (field-ref doc nesting, API-style subkeys)
+            detail.setdefault('delivery', {})['invoicing_period'] = dict(obj)
 
         # payment_instructions — required for all doc types except credit
         # notes / deemed supply. IBT-081 payment means type code.

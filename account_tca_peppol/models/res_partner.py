@@ -9,6 +9,7 @@ from odoo.addons.account_tca_peppol.constants import (
     RE_UAE_TIN,
     RE_UAE_TRN,
     UAE_EMIRATES,
+    UAE_STATE_CODE_TO_EMIRATE,
 )
 from odoo.exceptions import ValidationError
 
@@ -178,7 +179,12 @@ class ResPartner(models.Model):
         if not self:
             return ''
         self.ensure_one()
-        return self.tca_emirate or (self.state_id and self.state_id.code) or ''
+        if self.tca_emirate:
+            return self.tca_emirate
+        code = self.state_id.code if self.state_id else ''
+        # Map Odoo's UAE state code (e.g. 'DU') to the PINT AE emirate code
+        # ('DXB'); pass through anything already an emirate code.
+        return UAE_STATE_CODE_TO_EMIRATE.get(code, code) or ''
 
     def _tca_get_tin(self):
         """

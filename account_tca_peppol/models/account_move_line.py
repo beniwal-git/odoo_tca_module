@@ -66,6 +66,18 @@ class AccountMoveLine(models.Model):
             'Rendered as Item/ItemInstance/LotIdentification/LotNumberID.'
         ),
     )
+    tca_vat_exemption_reason_code = fields.Char(
+        string='VAT Exemption Reason Code (IBT-186)',
+        help=(
+            'IBT-186: reason this line is exempt from VAT. Mandatory when the '
+            'line VAT category is E (Exempt) — schematron ibr-167-ae.\n'
+            'Per-line override: takes precedence over the exemption reason set '
+            'on the tax record. Leave blank to fall back to the tax value.\n'
+            'UAE Article-46 exempt supplies: DL8.46.1 financial services, '
+            'DL8.46.2 residential units, DL8.46.3 bare land, DL8.46.4 local '
+            'passenger transport.'
+        ),
+    )
     tca_per_unit_amount = fields.Float(
         string='Per Unit Amount',
         digits='Product Price',
@@ -128,6 +140,28 @@ class AccountMoveLine(models.Model):
              'tca_commodity_type if any, otherwise inferred from the product type. '
              'Used by validation and XML emission so inference happens once.',
     )
+
+    # ── Exempt-line flag (drives the "reason required" UI) ────────────────────
+    # True when the line carries an Exempt (E) VAT tax but no exemption reason
+    # is available yet — neither on the line nor as a default on the tax. The
+    # view binds the reason field's `required` to this, so it turns mandatory
+    # the moment an Exempt tax is picked. The server-side confirm gate
+    # (_tca_check_lines, ibr-167-ae) enforces the same rule authoritatively.
+    tca_line_needs_exemption_reason = fields.Boolean(
+        compute='_compute_tca_line_needs_exemption_reason',
+        help='Internal: the line is Exempt (E) and still lacks a VAT exemption '
+             'reason code (IBT-186) on either the line or the tax.',
+    )
+
+    @api.depends('tax_ids', 'tax_ids.tca_tax_category',
+                 'tax_ids.tca_exemption_reason_code', 'tca_vat_exemption_reason_code')
+    def _compute_tca_line_needs_exemption_reason(self):
+        for line in self:
+            exempt_tax = line.tax_ids.filtered(
+                lambda t: t.tca_tax_category == 'E')[:1]
+            has_reason = bool((line.tca_vat_exemption_reason_code or '').strip()) or (
+                bool(exempt_tax) and bool(exempt_tax.tca_exemption_reason_code))
+            line.tca_line_needs_exemption_reason = bool(exempt_tax) and not has_reason
 
     @api.depends('product_id')
     def _compute_product_uom_id(self):

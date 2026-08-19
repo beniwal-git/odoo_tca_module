@@ -12,6 +12,19 @@ UAE_TAX_CATEGORY_SELECTION = [
     ('N',  'N — Standard Rate Additional VAT'),
 ]
 
+# UAE VAT exemption reason codes (BTAE / IBT-186) — the only four exempt
+# supplies under UAE VAT Decree-Law Article 46, per the PINT AE
+# `Aligned-TaxExemptionCodes.gc` code list. Required on any tax whose
+# category is 'E' (schematron ibr-167-ae). The shipped example XMLs use a
+# stale EU placeholder (`VATEX-AE-EDU`, education — which is zero-rated, not
+# exempt, in the UAE); the .gc code list is authoritative, so we bind here.
+UAE_TAX_EXEMPTION_REASON_SELECTION = [
+    ('DL8.46.1', 'DL8.46.1 — Certain financial services'),
+    ('DL8.46.2', 'DL8.46.2 — Supply of residential units (lease or sale)'),
+    ('DL8.46.3', 'DL8.46.3 — Bare land'),
+    ('DL8.46.4', 'DL8.46.4 — Local passenger transport'),
+]
+
 
 class AccountTax(models.Model):
     """
@@ -38,14 +51,16 @@ class AccountTax(models.Model):
         ),
     )
 
-    tca_exemption_reason_code = fields.Char(
+    tca_exemption_reason_code = fields.Selection(
+        selection=UAE_TAX_EXEMPTION_REASON_SELECTION,
         string='UAE Exemption Reason Code (IBT-121)',
-        size=64,
         help=(
-            'PINT AE IBT-121: Code from the AE-Exempt code list explaining why '
-            'this tax is exempt or zero-rated (e.g. "VATEX-AE-SPEC").\n'
-            'Mandatory when tca_tax_category is Z or E.\n'
-            'Leave blank to use the Odoo default (EU codes — not valid for UAE).'
+            'PINT AE IBT-186/121: the UAE VAT-law reason this supply is exempt. '
+            'Rendered as TaxExemptionReasonCode.\n'
+            'MANDATORY when the VAT category is E (Exempt) — schematron '
+            'ibr-167-ae rejects an exempt line without it.\n'
+            'Only the four Article-46 exempt supplies are valid: financial '
+            'services, residential units, bare land, local passenger transport.'
         ),
     )
 

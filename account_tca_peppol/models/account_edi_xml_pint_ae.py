@@ -237,13 +237,8 @@ class AccountEdiXmlUBLPintAe(models.AbstractModel):
             )
             flags = '00000000'
 
-        # F2-9 / F1-3: auto-detect export — if buyer country is not AE, the
-        # Exports bit (position 8, index 7) must be 1 per PINT AE spec.
-        # Overrides any user-set value for that bit (it's factual, not a choice).
-        buyer = invoice.partner_id.commercial_partner_id
-        if buyer.country_id and buyer.country_id.code != 'AE':
-            flags = flags[:7] + '1'
-
+        # Export (position 8) is a manual user flag (tca_flag_export), already
+        # encoded in tca_transaction_type_flags — no auto-detection here.
         return flags
 
     # ──────────────────────────────────────────────────────────────────────────

@@ -30,6 +30,20 @@ UAE_EAS = '0235'
 #: FUJ=Fujairah, AJM=Ajman, RAK=Ras Al Khaimah.
 UAE_EMIRATES = ('AUH', 'DXB', 'SHJ', 'UAQ', 'FUJ', 'AJM', 'RAK')
 
+#: Odoo's built-in UAE state codes (res.country.state, ISO-3166-2-ish) differ
+#: from the PINT AE emirate codes above. Map them so an AE address emits a
+#: recognised emirate code (ibr-128-ae) instead of the raw Odoo code (e.g.
+#: 'DU' → 'DXB'). Codes already equal to an emirate code pass through unchanged.
+UAE_STATE_CODE_TO_EMIRATE = {
+    'AZ': 'AUH',  # Abu Dhabi
+    'DU': 'DXB',  # Dubai
+    'SH': 'SHJ',  # Sharjah
+    'AJ': 'AJM',  # Ajman
+    'UQ': 'UAQ',  # Umm al-Quwain
+    'RK': 'RAK',  # Ras al-Khaimah
+    'FU': 'FUJ',  # Fujairah
+}
+
 # ──────────────────────────────────────────────────────────────────────────
 # PINT AE predefined participant IDs (BIS 1.5.3, eas=0235)
 #

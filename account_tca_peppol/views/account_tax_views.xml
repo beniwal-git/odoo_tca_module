@@ -17,7 +17,8 @@
                        help="IBT-118: UAE VAT category code for PINT AE XML generation. Leave blank to use Odoo auto-detection."/>
                 <field name="tca_exemption_reason_code"
                        invisible="not tca_tax_category or tca_tax_category in ('S', 'AE')"
-                       help="IBT-121: AE-Exempt code list value. Required when category is Z, E, or G."/>
+                       required="tca_tax_category == 'E'"
+                       help="IBT-186/121: UAE Article-46 exemption reason. Mandatory when category is E (Exempt) — schematron ibr-167-ae."/>
                 <field name="tca_exemption_reason"
                        invisible="not tca_tax_category or tca_tax_category in ('S', 'AE')"
                        help="IBT-120: Human-readable exemption reason text."/>

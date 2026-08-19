@@ -259,6 +259,8 @@
                                        invisible="not tca_show_special_flags"/>
                                 <field name="tca_flag_ecommerce"
                                        invisible="not tca_show_special_flags"/>
+                                <field name="tca_flag_export"
+                                       invisible="not tca_show_special_flags"/>
                                 <!-- Raw BTAE-02 string kept invisible — computed from the
                                      booleans above. Read by the XML builder. -->
                                 <field name="tca_transaction_type_flags" invisible="1"/>
@@ -267,7 +269,7 @@
                     </div>
                     <!-- Additional Details — its own row below the 3-col row, only visible when special flags ask for it. -->
                     <group string="Additional Details"
-                           invisible="not tca_create_einvoice or move_type in ('in_invoice', 'in_refund') or (not tca_flag_disclosed_agent and not tca_flag_continuous_supply and not tca_flag_summary_invoice and not tca_is_export)"
+                           invisible="not tca_create_einvoice or (move_type in ('in_invoice', 'in_refund') and not tca_is_self_billing) or (not tca_flag_disclosed_agent and not tca_flag_continuous_supply and not tca_flag_summary_invoice and not tca_is_export)"
                            class="mt-3">
                         <field name="tca_principal_id" string="Principal TRN"
                                invisible="not tca_flag_disclosed_agent"/>
@@ -287,7 +289,7 @@
                     <!-- Inbound only: read-only display of optional fields the seller populated.
                          Each field hides when empty to keep the panel clean. -->
                     <group string="Additional Information (from seller)"
-                           invisible="move_type not in ('in_invoice', 'in_refund')">
+                           invisible="move_type not in ('in_invoice', 'in_refund') or tca_is_self_billing">
                         <group class="pe-md-5">
                             <field name="tca_buyer_accounting_ref" string="Buyer Accounting Ref" readonly="1"
                                    invisible="not tca_buyer_accounting_ref"/>
@@ -329,6 +331,10 @@
                 <field name="tca_service_accounting_code" optional="hide" string="SAC" column_invisible="not parent.tca_create_einvoice"/>
                 <field name="tca_standard_item_id" optional="hide" string="GTIN / Standard ID" column_invisible="not parent.tca_create_einvoice"/>
                 <field name="tca_rc_description" optional="hide" string="RC Description" column_invisible="not parent.tca_create_einvoice"/>
+                <field name="tca_line_needs_exemption_reason" column_invisible="1"/>
+                <field name="tca_vat_exemption_reason_code" optional="show" string="Exemption Reason (E)"
+                       column_invisible="not parent.tca_create_einvoice"
+                       required="tca_line_needs_exemption_reason"/>
             </xpath>
 
             <!-- PINT AE requires Unit of Measure (IBT-130) on every line.

@@ -17,10 +17,12 @@ PINT_AE_PROFILE_ID = 'urn:peppol:bis:billing'
 PINT_AE_SELFBILLING_PROFILE_ID = 'urn:peppol:bis:selfbilling'
 
 #: All PINT AE CustomizationIDs (billing + selfbilling) — for inbound routing.
-PINT_AE_CUSTOMIZATION_IDS = frozenset([
-    PINT_AE_CUSTOMIZATION_ID,
-    PINT_AE_SELFBILLING_CUSTOMIZATION_ID,
-])
+PINT_AE_CUSTOMIZATION_IDS = frozenset(
+    [
+        PINT_AE_CUSTOMIZATION_ID,
+        PINT_AE_SELFBILLING_CUSTOMIZATION_ID,
+    ]
+)
 
 #: UAE Peppol Electronic Address Scheme code (FTA-assigned).
 UAE_EAS = '0235'
@@ -52,8 +54,8 @@ UAE_STATE_CODE_TO_EMIRATE = {
 # platform) only.
 # ──────────────────────────────────────────────────────────────────────────
 
-PREDEFINED_DEEMED = '9900000097'            # Deemed Supply (BTAE-02 pos 2 = 1)
-PREDEFINED_NOT_SUBJECT = '9900000098'       # Buyer not subject to UAE e-invoicing
+PREDEFINED_DEEMED = '9900000097'  # Deemed Supply (BTAE-02 pos 2 = 1)
+PREDEFINED_NOT_SUBJECT = '9900000098'  # Buyer not subject to UAE e-invoicing
 PREDEFINED_EXPORT_NO_PEPPOL = '9900000099'  # Export, receiver not in Peppol (BTAE-02 pos 8 = 1)
 
 #: Legacy placeholder used before BIS 1.5.3 was published. Treated as
@@ -62,12 +64,14 @@ LEGACY_PLACEHOLDER_PARTICIPANT = '1XXXXXXXXX'
 
 #: All participant IDs that mean "no real Peppol receiver" — used to detect
 #: anonymous buyers (`tca_buyer_participant_id` membership check).
-ANON_BUYER_PIDS = frozenset((
-    PREDEFINED_DEEMED,
-    PREDEFINED_NOT_SUBJECT,
-    PREDEFINED_EXPORT_NO_PEPPOL,
-    LEGACY_PLACEHOLDER_PARTICIPANT,
-))
+ANON_BUYER_PIDS = frozenset(
+    (
+        PREDEFINED_DEEMED,
+        PREDEFINED_NOT_SUBJECT,
+        PREDEFINED_EXPORT_NO_PEPPOL,
+        LEGACY_PLACEHOLDER_PARTICIPANT,
+    )
+)
 
 # ──────────────────────────────────────────────────────────────────────────
 # Validation regexes

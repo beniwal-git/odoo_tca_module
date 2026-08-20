@@ -16,6 +16,7 @@ class AccountMoveLine(models.Model):
       - tca_lot_number: Lot number for exports — BTAE-24
       - tca_per_unit_amount: Per-unit amount for margin/e-commerce — PerUnitAmount
     """
+
     _inherit = 'account.move.line'
 
     tca_commodity_type = fields.Selection(
@@ -52,7 +53,7 @@ class AccountMoveLine(models.Model):
         string='Service Accounting Code (BTAE-17)',
         help=(
             'BTAE-17: Numeric service classification code. Optional at confirm '
-            'time; TCA\'s server schematron (ibr-185-ae / ibr-186-ae) may '
+            "time; TCA's server schematron (ibr-185-ae / ibr-186-ae) may "
             'require it when the line is Services or Both. Common sources: '
             'UN CPC (5 digits, e.g. 84111), India GST SAC (6 digits, e.g. '
             '998311), or your own internal scheme. Rendered as '
@@ -137,8 +138,8 @@ class AccountMoveLine(models.Model):
         compute='_compute_tca_effective_commodity_type',
         store=True,
         help='Resolved Goods/Services classification for this line: the user-set '
-             'tca_commodity_type if any, otherwise inferred from the product type. '
-             'Used by validation and XML emission so inference happens once.',
+        'tca_commodity_type if any, otherwise inferred from the product type. '
+        'Used by validation and XML emission so inference happens once.',
     )
 
     # ── Exempt-line flag (drives the "reason required" UI) ────────────────────
@@ -150,17 +151,21 @@ class AccountMoveLine(models.Model):
     tca_line_needs_exemption_reason = fields.Boolean(
         compute='_compute_tca_line_needs_exemption_reason',
         help='Internal: the line is Exempt (E) and still lacks a VAT exemption '
-             'reason code (IBT-186) on either the line or the tax.',
+        'reason code (IBT-186) on either the line or the tax.',
     )
 
-    @api.depends('tax_ids', 'tax_ids.tca_tax_category',
-                 'tax_ids.tca_exemption_reason_code', 'tca_vat_exemption_reason_code')
+    @api.depends(
+        'tax_ids',
+        'tax_ids.tca_tax_category',
+        'tax_ids.tca_exemption_reason_code',
+        'tca_vat_exemption_reason_code',
+    )
     def _compute_tca_line_needs_exemption_reason(self):
         for line in self:
-            exempt_tax = line.tax_ids.filtered(
-                lambda t: t.tca_tax_category == 'E')[:1]
+            exempt_tax = line.tax_ids.filtered(lambda t: t.tca_tax_category == 'E')[:1]
             has_reason = bool((line.tca_vat_exemption_reason_code or '').strip()) or (
-                bool(exempt_tax) and bool(exempt_tax.tca_exemption_reason_code))
+                bool(exempt_tax) and bool(exempt_tax.tca_exemption_reason_code)
+            )
             line.tca_line_needs_exemption_reason = bool(exempt_tax) and not has_reason
 
     @api.depends('product_id')
@@ -181,12 +186,21 @@ class AccountMoveLine(models.Model):
         default_uom = self.env.ref('uom.product_uom_unit', raise_if_not_found=False)
         if default_uom:
             for vals in vals_list:
-                if vals.get('display_type', 'product') == 'product' and not vals.get('product_uom_id') and not vals.get('product_id'):
+                if (
+                    vals.get('display_type', 'product') == 'product'
+                    and not vals.get('product_uom_id')
+                    and not vals.get('product_id')
+                ):
                     vals['product_uom_id'] = default_uom.id
         return super().create(vals_list)
 
-    @api.depends('tca_commodity_type', 'tca_hs_code', 'tca_service_accounting_code',
-                 'product_id', 'product_id.type')
+    @api.depends(
+        'tca_commodity_type',
+        'tca_hs_code',
+        'tca_service_accounting_code',
+        'product_id',
+        'product_id.type',
+    )
     def _compute_tca_effective_commodity_type(self):
         for line in self:
             line.tca_effective_commodity_type = (
@@ -237,9 +251,12 @@ class AccountMoveLine(models.Model):
             if not code:
                 continue
             if not self._RE_HS_CODE.match(code):
-                raise ValidationError(_(
-                    '"HS / CPV Code" must be 6 to 12 digits. Current: "%s".', code,
-                ))
+                raise ValidationError(
+                    _(
+                        '"HS / CPV Code" must be 6 to 12 digits. Current: "%s".',
+                        code,
+                    )
+                )
 
     @api.constrains('tca_service_accounting_code')
     def _check_tca_service_accounting_code_format(self):
@@ -248,6 +265,9 @@ class AccountMoveLine(models.Model):
             if not code:
                 continue
             if not self._RE_DIGITS.match(code):
-                raise ValidationError(_(
-                    '"Service Accounting Code" must contain digits only. Current: "%s".', code,
-                ))
+                raise ValidationError(
+                    _(
+                        '"Service Accounting Code" must contain digits only. Current: "%s".',
+                        code,
+                    )
+                )

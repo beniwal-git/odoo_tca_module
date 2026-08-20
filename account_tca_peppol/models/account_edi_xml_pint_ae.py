@@ -49,12 +49,12 @@ _logger = logging.getLogger(__name__)
 
 # UAE VAT categories used by the mandate — only these six are permitted.
 UAE_VAT_CATEGORIES = {
-    'S':  5.0,    # Standard Rate 5%
-    'E':  0.0,    # Exempt from tax
-    'O':  None,   # Services outside scope / Not subject to VAT
-    'AE': 5.0,    # VAT Reverse Charge (VAT accounted by buyer)
-    'Z':  0.0,    # Zero Rated
-    'N':  5.0,    # Standard Rate Additional VAT (extra base not in document totals)
+    'S': 5.0,  # Standard Rate 5%
+    'E': 0.0,  # Exempt from tax
+    'O': None,  # Services outside scope / Not subject to VAT
+    'AE': 5.0,  # VAT Reverse Charge (VAT accounted by buyer)
+    'Z': 0.0,  # Zero Rated
+    'N': 5.0,  # Standard Rate Additional VAT (extra base not in document totals)
 }
 
 
@@ -63,6 +63,7 @@ class AccountEdiXmlUBLPintAe(models.AbstractModel):
     PINT AE XML builder — inherits the full UBL BIS3 pipeline and
     overrides/extends only the UAE-specific elements.
     """
+
     _name = 'account.edi.xml.ubl_pint_ae'
     _inherit = 'account.edi.xml.ubl_bis3'
     _description = 'UAE PINT AE (Peppol International Invoice — UAE Annex)'
@@ -72,7 +73,7 @@ class AccountEdiXmlUBLPintAe(models.AbstractModel):
     # ──────────────────────────────────────────────────────────────────────────
 
     def _export_invoice_filename(self, invoice):
-        return f"{invoice.name.replace('/', '_')}_pint_ae.xml"
+        return f'{invoice.name.replace("/", "_")}_pint_ae.xml'
 
     def _export_invoice_ecosio_schematrons(self):
         return {}  # TCA runs its own schematron; no ecosio integration needed
@@ -104,25 +105,29 @@ class AccountEdiXmlUBLPintAe(models.AbstractModel):
     def _get_document_template(self, vals):
         # OVERRIDE account.edi.xml.ubl_20 — see section note above.
         template = copy.deepcopy(super()._get_document_template(vals))
-        line_key = ('cac:CreditNoteLine' if vals['document_type'] == 'credit_note'
-                    else 'cac:InvoiceLine')
+        line_key = (
+            'cac:CreditNoteLine' if vals['document_type'] == 'credit_note' else 'cac:InvoiceLine'
+        )
 
         # Root: BTAE-21 StatementDocumentReference (after DespatchDocumentReference).
         template = self._tca_tmpl_insert_after(
-            template, 'cac:DespatchDocumentReference',
+            template,
+            'cac:DespatchDocumentReference',
             'cac:StatementDocumentReference',
             copy.deepcopy(template.get('cac:DespatchDocumentReference') or {'cbc:ID': {}}),
         )
 
         # Party legal entity: IBT-033 CompanyLegalForm (after CompanyID).
-        for party_key in ('cac:AccountingSupplierParty',
-                          'cac:AccountingCustomerParty',
-                          'cac:SellerSupplierParty'):
+        for party_key in (
+            'cac:AccountingSupplierParty',
+            'cac:AccountingCustomerParty',
+            'cac:SellerSupplierParty',
+        ):
             party = (template.get(party_key) or {}).get('cac:Party')
             if party and 'cac:PartyLegalEntity' in party:
                 party['cac:PartyLegalEntity'] = self._tca_tmpl_insert_after(
-                    party['cac:PartyLegalEntity'],
-                    'cbc:CompanyID', 'cbc:CompanyLegalForm', {})
+                    party['cac:PartyLegalEntity'], 'cbc:CompanyID', 'cbc:CompanyLegalForm', {}
+                )
 
         # BTAE-01: BuyerCustomerParty slot for the FTZ Beneficiary ID.
         # PINT AE rule ibr-007-ae requires cac:BuyerCustomerParty/cac:Party/
@@ -131,7 +136,8 @@ class AccountEdiXmlUBLPintAe(models.AbstractModel):
         # UBL 2.1 schema order); the emission override populates it only when
         # the invoice carries a beneficiary ID.
         template = self._tca_tmpl_insert_after(
-            template, 'cac:AccountingCustomerParty',
+            template,
+            'cac:AccountingCustomerParty',
             'cac:BuyerCustomerParty',
             {'cac:Party': {'cac:PartyIdentification': {'cbc:ID': {}}}},
         )
@@ -160,14 +166,14 @@ class AccountEdiXmlUBLPintAe(models.AbstractModel):
         # IBT-200: TaxIncludedIndicator on the document TaxTotal.
         if 'cac:TaxTotal' in template:
             template['cac:TaxTotal'] = self._tca_tmpl_insert_after(
-                template['cac:TaxTotal'], 'cbc:RoundingAmount',
-                'cbc:TaxIncludedIndicator', {})
+                template['cac:TaxTotal'], 'cbc:RoundingAmount', 'cbc:TaxIncludedIndicator', {}
+            )
 
         # BTAE-22: DeliveryTerms on cac:Delivery.
         if 'cac:Delivery' in template:
             template['cac:Delivery'] = self._tca_tmpl_insert_after(
-                template['cac:Delivery'], 'cac:DeliveryParty',
-                'cac:DeliveryTerms', {'cbc:ID': {}})
+                template['cac:Delivery'], 'cac:DeliveryParty', 'cac:DeliveryTerms', {'cbc:ID': {}}
+            )
         return template
 
     # ──────────────────────────────────────────────────────────────────────────
@@ -192,8 +198,9 @@ class AccountEdiXmlUBLPintAe(models.AbstractModel):
         # EXTENDS account.edi.xml.ubl_bis3 — swap in the PINT AE CustomizationID.
         super()._ubl_add_customization_id_node(vals)
         process_type = self._tca_process_type(vals['invoice'])
-        vals['document_node']['cbc:CustomizationID']['_text'] = \
-            self._get_customization_id(process_type)
+        vals['document_node']['cbc:CustomizationID']['_text'] = self._get_customization_id(
+            process_type
+        )
 
     def _ubl_add_profile_id_node(self, vals):
         # EXTENDS account.edi.xml.ubl_bis3 — PINT AE uses urn:peppol:bis:billing
@@ -201,8 +208,7 @@ class AccountEdiXmlUBLPintAe(models.AbstractModel):
         super()._ubl_add_profile_id_node(vals)
         process_type = self._tca_process_type(vals['invoice'])
         vals['document_node']['cbc:ProfileID']['_text'] = (
-            PINT_AE_SELFBILLING_PROFILE_ID if process_type == 'selfbilling'
-            else PINT_AE_PROFILE_ID
+            PINT_AE_SELFBILLING_PROFILE_ID if process_type == 'selfbilling' else PINT_AE_PROFILE_ID
         )
 
     # ──────────────────────────────────────────────────────────────────────────
@@ -233,7 +239,8 @@ class AccountEdiXmlUBLPintAe(models.AbstractModel):
         if len(flags) != 8 or not all(c in '01' for c in flags):
             _logger.warning(
                 'PINT AE: invalid BTAE-02 flags "%s" on invoice %s — using 00000000',
-                flags, invoice.name
+                flags,
+                invoice.name,
             )
             flags = '00000000'
 
@@ -358,14 +365,16 @@ class AccountEdiXmlUBLPintAe(models.AbstractModel):
         super()._ubl_add_billing_reference_nodes(vals)
         invoice = vals.get('invoice')
         if invoice and invoice.reversed_entry_id:
-            vals['document_node']['cac:BillingReference'].append({
-                'cac:InvoiceDocumentReference': {
-                    'cbc:ID': {'_text': invoice.reversed_entry_id.name},
-                    'cbc:IssueDate': {
-                        '_text': invoice.reversed_entry_id.invoice_date,
+            vals['document_node']['cac:BillingReference'].append(
+                {
+                    'cac:InvoiceDocumentReference': {
+                        'cbc:ID': {'_text': invoice.reversed_entry_id.name},
+                        'cbc:IssueDate': {
+                            '_text': invoice.reversed_entry_id.invoice_date,
+                        },
                     },
-                },
-            })
+                }
+            )
 
     def _add_invoice_exchange_rate_nodes(self, document_node, vals):
         # OVERRIDE account.edi.xml.ubl_20 (no-op parent) — BTAE-04: when the
@@ -376,7 +385,9 @@ class AccountEdiXmlUBLPintAe(models.AbstractModel):
         aed = self.env.ref('base.AED', raise_if_not_found=False) or invoice.company_id.currency_id
         if invoice.currency_id and invoice.currency_id != aed:
             rate = self.env['res.currency']._get_conversion_rate(
-                invoice.currency_id, aed, invoice.company_id,
+                invoice.currency_id,
+                aed,
+                invoice.company_id,
                 invoice.invoice_date or fields.Date.today(),
             )
             document_node['cac:TaxExchangeRate'] = {
@@ -426,10 +437,7 @@ class AccountEdiXmlUBLPintAe(models.AbstractModel):
         categories = node.get('cac:TaxCategory') or []
         if not isinstance(categories, list):
             categories = [categories]
-        is_n = any(
-            (cat.get('cbc:ID') or {}).get('_text') == 'N'
-            for cat in categories
-        )
+        is_n = any((cat.get('cbc:ID') or {}).get('_text') == 'N' for cat in categories)
         if is_n:
             currency = tax_subtotal['currency']
             node['cbc:TaxAmount']['_text'] = FloatFmt(0.0, min_dp=currency.decimal_places)
@@ -560,7 +568,8 @@ class AccountEdiXmlUBLPintAe(models.AbstractModel):
         if not invoice or role not in ('supplier', 'customer'):
             return node
         override = (
-            invoice.tca_seller_participant_id if role == 'supplier'
+            invoice.tca_seller_participant_id
+            if role == 'supplier'
             else invoice.tca_buyer_participant_id
         )
         override = (override or '').strip()
@@ -625,8 +634,7 @@ class AccountEdiXmlUBLPintAe(models.AbstractModel):
             trade_license = invoice.tca_buyer_trade_license
         else:
             trade_license = (
-                commercial.tca_trade_license or commercial.company_registry
-                or commercial.vat or ''
+                commercial.tca_trade_license or commercial.company_registry or commercial.vat or ''
             )
         if is_buyer and invoice.tca_buyer_legal_id_type:
             legal_id_type = invoice.tca_buyer_legal_id_type
@@ -641,7 +649,8 @@ class AccountEdiXmlUBLPintAe(models.AbstractModel):
         else:
             passport_code = (
                 commercial.tca_passport_country_id.code
-                if commercial.tca_passport_country_id else ''
+                if commercial.tca_passport_country_id
+                else ''
             )
         return trade_license, legal_id_type, legal_authority, passport_code
 
@@ -674,10 +683,12 @@ class AccountEdiXmlUBLPintAe(models.AbstractModel):
         if commercial._tca_is_uae_party():
             trn = commercial.vat or commercial.peppol_endpoint or ''
             if trn:
-                vals['party_node']['cac:PartyTaxScheme'] = [{
-                    'cbc:CompanyID': {'_text': trn},
-                    'cac:TaxScheme': {'cbc:ID': {'_text': 'VAT'}},
-                }]
+                vals['party_node']['cac:PartyTaxScheme'] = [
+                    {
+                        'cbc:CompanyID': {'_text': trn},
+                        'cac:TaxScheme': {'cbc:ID': {'_text': 'VAT'}},
+                    }
+                ]
 
     def _ubl_add_party_legal_entity_nodes(self, vals):
         # EXTENDS account.edi.xml.ubl_bis3 — UAE PartyLegalEntity: CompanyID =
@@ -691,8 +702,9 @@ class AccountEdiXmlUBLPintAe(models.AbstractModel):
         if not (commercial._tca_is_uae_party()):
             return
 
-        trade_license, legal_id_type, legal_authority, passport_code = \
-            self._tca_resolve_legal_id(vals, partner)
+        trade_license, legal_id_type, legal_authority, passport_code = self._tca_resolve_legal_id(
+            vals, partner
+        )
 
         nodes = vals['party_node']['cac:PartyLegalEntity']
         if nodes:
@@ -763,18 +775,22 @@ class AccountEdiXmlUBLPintAe(models.AbstractModel):
             primary['cbc:NatureCode'] = {'_text': line.tca_rc_description}
         nodes.append(primary)
         if line.tca_hs_code:
-            nodes.append({
-                'cbc:ItemClassificationCode': {
-                    '_text': line.tca_hs_code,
-                    'listID': 'HS',
-                    'listVersionID': '1.0',
-                },
-            })
+            nodes.append(
+                {
+                    'cbc:ItemClassificationCode': {
+                        '_text': line.tca_hs_code,
+                        'listID': 'HS',
+                        'listVersionID': '1.0',
+                    },
+                }
+            )
         sac = line.tca_service_accounting_code or ''
         if sac:
-            nodes.append({
-                'cbc:ItemClassificationCode': {'_text': sac, 'listID': 'SAC'},
-            })
+            nodes.append(
+                {
+                    'cbc:ItemClassificationCode': {'_text': sac, 'listID': 'SAC'},
+                }
+            )
 
     def _ubl_add_line_price_node(self, vals, in_foreign_currency=True):
         # EXTENDS account.edi.xml.ubl — ibr-126-ae: Price/BaseQuantity is
@@ -836,8 +852,7 @@ class AccountEdiXmlUBLPintAe(models.AbstractModel):
         line_vat = sum(
             td.get('tax_amount_currency', 0.0)
             for td in base_line['tax_details'].get('taxes_data', [])
-            if not self._ubl_is_excise_tax(td)
-            and not self._ubl_is_recycling_contribution_tax(td)
+            if not self._ubl_is_excise_tax(td) and not self._ubl_is_recycling_contribution_tax(td)
         )
         # Net line amount = LineExtensionAmount already on the node.
         line_net = float((line_node.get('cbc:LineExtensionAmount') or {}).get('_text') or 0.0)
@@ -856,12 +871,14 @@ class AccountEdiXmlUBLPintAe(models.AbstractModel):
             },
         }
         # Line-level TaxTotal — BIS3 drops it; PINT AE (BTAE-08) needs it.
-        line_node['cac:TaxTotal'] = [{
-            'cbc:TaxAmount': {
-                '_text': FloatFmt(line_vat, min_dp=dp),
-                'currencyID': currency.name,
-            },
-        }]
+        line_node['cac:TaxTotal'] = [
+            {
+                'cbc:TaxAmount': {
+                    '_text': FloatFmt(line_vat, min_dp=dp),
+                    'currencyID': currency.name,
+                },
+            }
+        ]
         # IBT-127: line note. Append (not replace) so any upstream-set note
         # survives — bis3's `_ubl_add_line_note_nodes` initialises cbc:Note
         # as [], but a future cross-cutting localization could add to it.
@@ -921,11 +938,24 @@ class AccountEdiXmlUBLPintAe(models.AbstractModel):
 
     # Valid selection keys for fields that must match exactly
     _CREDIT_NOTE_REASON_KEYS = {
-        'DL8.61.1.A', 'DL8.61.1.B', 'DL8.61.1.C',
-        'DL8.61.1.D', 'DL8.61.1.E', 'VD',
+        'DL8.61.1.A',
+        'DL8.61.1.B',
+        'DL8.61.1.C',
+        'DL8.61.1.D',
+        'DL8.61.1.E',
+        'VD',
     }
     _BILLING_FREQ_KEYS = {
-        'DLY', 'WKY', 'Q15', 'MTH', 'Q45', 'Q60', 'QTR', 'YRL', 'HYR', 'OTH',
+        'DLY',
+        'WKY',
+        'Q15',
+        'MTH',
+        'Q45',
+        'Q60',
+        'QTR',
+        'YRL',
+        'HYR',
+        'OTH',
     }
     _INVOICE_TYPE_KEYS = {'380', '381', '389', '261', '480', '81'}
 
@@ -961,7 +991,8 @@ class AccountEdiXmlUBLPintAe(models.AbstractModel):
             else:
                 _logger.warning(
                     'PINT AE import: unrecognised invoice type code "%s" on %s',
-                    val, invoice.ref or invoice.name,
+                    val,
+                    invoice.ref or invoice.name,
                 )
 
         # ── BTAE-03: DiscrepancyResponse/ResponseCode → credit note reason
@@ -1055,9 +1086,9 @@ class AccountEdiXmlUBLPintAe(models.AbstractModel):
         so pair the XML lines with the product lines positionally — _import_lines
         preserves document order."""
         logs = []
-        line_tag = ('CreditNoteLine'
-                    if invoice.move_type in ('out_refund', 'in_refund')
-                    else 'InvoiceLine')
+        line_tag = (
+            'CreditNoteLine' if invoice.move_type in ('out_refund', 'in_refund') else 'InvoiceLine'
+        )
         line_trees = tree.findall('./{*}' + line_tag)
         product_lines = invoice._tca_product_lines()
 
@@ -1076,7 +1107,9 @@ class AccountEdiXmlUBLPintAe(models.AbstractModel):
                 line.tca_rc_description = node.text.strip()
 
             # ── IBT-158 / BTAE-17: ItemClassificationCode (HS + SAC) ─────
-            for cls_node in line_tree.findall('.//{*}CommodityClassification/{*}ItemClassificationCode'):
+            for cls_node in line_tree.findall(
+                './/{*}CommodityClassification/{*}ItemClassificationCode'
+            ):
                 list_id = cls_node.attrib.get('listID', '')
                 if cls_node.text:
                     if list_id == 'HS':

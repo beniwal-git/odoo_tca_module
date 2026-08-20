@@ -52,17 +52,18 @@ CREDIT_NOTE_REASONS = [
 
 # TCA Invoice Status integer codes (from API spec)
 TCA_STATUS_PROCESSING = 1
-TCA_STATUS_COMPLETED  = 2
-TCA_STATUS_REJECTED   = 3
-TCA_STATUS_FAILED     = 4
+TCA_STATUS_COMPLETED = 2
+TCA_STATUS_REJECTED = 3
+TCA_STATUS_FAILED = 4
 
 # TCA C3 MLS status integer codes
-TCA_C3_ACCEPTED            = 4   # Delivered to buyer AP
-TCA_C3_REJECTED            = 5
-TCA_C3_UNABLE_TO_DELIVER   = 6
+TCA_C3_ACCEPTED = 4  # Delivered to buyer AP
+TCA_C3_REJECTED = 5
+TCA_C3_UNABLE_TO_DELIVER = 6
 
 # TCA C5 MLS status integer codes
-TCA_C5_ACCEPTED            = 4   # Buyer confirmed receipt
+TCA_C5_ACCEPTED = 4  # Buyer confirmed receipt
+
 
 class AccountMove(models.Model):
     _inherit = 'account.move'
@@ -117,10 +118,10 @@ class AccountMove(models.Model):
         copy=False,
         readonly=True,
         help='The invoice_number actually sent to TCA on the most recent attempt. '
-             'Per UAE FTA compliance, each submission must carry a unique ID; we '
-             'compose <record name>-<uuid8> per attempt. Differs from this '
-             'record\'s name — Odoo keeps the canonical invoice number, TCA tracks '
-             'each submission with its own ID.',
+        'Per UAE FTA compliance, each submission must carry a unique ID; we '
+        'compose <record name>-<uuid8> per attempt. Differs from this '
+        "record's name — Odoo keeps the canonical invoice number, TCA tracks "
+        'each submission with its own ID.',
     )
     tca_is_inbound = fields.Boolean(
         string='TCA Inbound',
@@ -151,8 +152,8 @@ class AccountMove(models.Model):
         default=True,
         copy=False,
         help='When on, this document is validated and submitted as a UAE PINT AE '
-             'e-invoice via TCA Peppol. Turn off to issue a plain invoice without '
-             'e-invoicing — the PINT AE fields and compliance checks are skipped.',
+        'e-invoice via TCA Peppol. Turn off to issue a plain invoice without '
+        'e-invoicing — the PINT AE fields and compliance checks are skipped.',
     )
 
     # ── Currency lock — AED only for TCA-issued documents ────────────────────
@@ -174,18 +175,22 @@ class AccountMove(models.Model):
     # The @api.depends here REPLACES the parent's; redeclare upstream's
     # ('journal_id', 'statement_line_id') so super's logic still re-fires on
     # journal change for non-TCA moves.
-    @api.depends('journal_id', 'statement_line_id', 'journal_id.is_self_billing',
-                 'move_type', 'company_id.tca_is_active', 'tca_create_einvoice')
+    @api.depends(
+        'journal_id',
+        'statement_line_id',
+        'journal_id.is_self_billing',
+        'move_type',
+        'company_id.tca_is_active',
+        'tca_create_einvoice',
+    )
     def _compute_currency_id(self):
         super()._compute_currency_id()
         aed = self.env.ref('base.AED')
         for move in self:
             if not (move.company_id.tca_is_active and move.tca_create_einvoice):
                 continue
-            is_issued_by_us = (
-                move.move_type in ('out_invoice', 'out_refund')
-                or (move.move_type in ('in_invoice', 'in_refund')
-                    and move.journal_id.is_self_billing)
+            is_issued_by_us = move.move_type in ('out_invoice', 'out_refund') or (
+                move.move_type in ('in_invoice', 'in_refund') and move.journal_id.is_self_billing
             )
             if is_issued_by_us:
                 move.currency_id = aed
@@ -241,10 +246,10 @@ class AccountMove(models.Model):
         help=(
             'Peppol Participant ID of the seller (issuer of this invoice in '
             'real-world terms).\n'
-            'For outbound customer invoices: auto-populated from your company\'s '
+            "For outbound customer invoices: auto-populated from your company's "
             'Peppol Endpoint.\n'
             'For self-bills (in_* on a self-billing journal): auto-populated '
-            'from the vendor\'s Peppol Endpoint. If the vendor has no Peppol '
+            "from the vendor's Peppol Endpoint. If the vendor has no Peppol "
             'routing (off-network foreign supplier), enter a 10-digit '
             'fallback identifier manually.\n'
             'Editable per invoice — overrides the partner-level value.'
@@ -270,25 +275,28 @@ class AccountMove(models.Model):
     # toggle time; user can override per invoice. Cleared when the flag is
     # unticked. Builder emits these values in the Delivery node when set.
     tca_delivery_street = fields.Char(
-        string='Delivery Street', copy=True,
+        string='Delivery Street',
+        copy=True,
         help='Street name of the delivery address. Required when E-commerce '
-             'flag is set (ibr-142-ae). Auto-filled from the shipping party. '
-             'Carries over to credit notes so a reversal keeps the original '
-             'delivery context.',
+        'flag is set (ibr-142-ae). Auto-filled from the shipping party. '
+        'Carries over to credit notes so a reversal keeps the original '
+        'delivery context.',
     )
     tca_delivery_city = fields.Char(
-        string='Delivery City', copy=True,
+        string='Delivery City',
+        copy=True,
         help='City of the delivery address. Required when E-commerce flag '
-             'is set (ibr-142-ae). Auto-filled from the shipping party. '
-             'Carries over to credit notes.',
+        'is set (ibr-142-ae). Auto-filled from the shipping party. '
+        'Carries over to credit notes.',
     )
     tca_delivery_state_id = fields.Many2one(
         'res.country.state',
-        string='Delivery State / Emirate', copy=True,
+        string='Delivery State / Emirate',
+        copy=True,
         domain="[('country_id.code', '=', 'AE')]",
         help='State / Emirate of the delivery address. Required when '
-             'E-commerce flag is set (ibr-142-ae). Auto-filled from the '
-             'shipping party. Carries over to credit notes.',
+        'E-commerce flag is set (ibr-142-ae). Auto-filled from the '
+        'shipping party. Carries over to credit notes.',
     )
 
     @api.model
@@ -335,10 +343,13 @@ class AccountMove(models.Model):
         return partner.peppol_endpoint or ''
 
     @api.depends(
-        'partner_id', 'partner_id.peppol_endpoint', 'partner_id.country_id',
+        'partner_id',
+        'partner_id.peppol_endpoint',
+        'partner_id.country_id',
         'tca_transaction_type_flags',
         'journal_id.is_self_billing',
-        'company_id', 'company_id.partner_id.peppol_endpoint',
+        'company_id',
+        'company_id.partner_id.peppol_endpoint',
     )
     def _compute_tca_buyer_participant_id(self):
         """
@@ -363,8 +374,7 @@ class AccountMove(models.Model):
             # Inline the self-bill check rather than read move.tca_is_self_billing
             # — another compute may not have run yet under the same trigger.
             is_self_bill = (
-                move.move_type in ('in_invoice', 'in_refund')
-                and move.journal_id.is_self_billing
+                move.move_type in ('in_invoice', 'in_refund') and move.journal_id.is_self_billing
             )
             # Self-bill: the buyer is ALWAYS our own organisation and its
             # electronic address MUST be our TIN — TCA rejects otherwise
@@ -376,7 +386,8 @@ class AccountMove(models.Model):
             if is_self_bill:
                 buyer = move.company_id.partner_id.commercial_partner_id
                 move.tca_buyer_participant_id = self._tca_resolve_buyer_participant_id(
-                    buyer, move.tca_transaction_type_flags,
+                    buyer,
+                    move.tca_transaction_type_flags,
                 )
                 continue
             # Non-self-bill: preserve ANY user-set value. We no longer auto-set
@@ -388,13 +399,16 @@ class AccountMove(models.Model):
                 continue
             buyer = move.partner_id.commercial_partner_id
             move.tca_buyer_participant_id = self._tca_resolve_buyer_participant_id(
-                buyer, move.tca_transaction_type_flags,
+                buyer,
+                move.tca_transaction_type_flags,
             )
 
     @api.depends(
-        'partner_id', 'partner_id.peppol_endpoint',
+        'partner_id',
+        'partner_id.peppol_endpoint',
         'journal_id.is_self_billing',
-        'company_id', 'company_id.partner_id.peppol_endpoint',
+        'company_id',
+        'company_id.partner_id.peppol_endpoint',
     )
     def _compute_tca_seller_participant_id(self):
         """
@@ -416,8 +430,7 @@ class AccountMove(models.Model):
             # Inline the self-bill check rather than read move.tca_is_self_billing
             # — another compute may not have run yet under the same trigger.
             is_self_bill = (
-                move.move_type in ('in_invoice', 'in_refund')
-                and move.journal_id.is_self_billing
+                move.move_type in ('in_invoice', 'in_refund') and move.journal_id.is_self_billing
             )
             if is_self_bill:
                 # Seller is the vendor. Drop a stale company endpoint left in
@@ -447,42 +460,50 @@ class AccountMove(models.Model):
     # tca_transaction_type_flags (below) is COMPUTED from these.
 
     tca_flag_free_trade_zone = fields.Boolean(
-        string='Free Trade Zone', copy=True,
+        string='Free Trade Zone',
+        copy=True,
         help='Tick if the supply involves a UAE Free Trade Zone (BTAE-02 position 1).',
     )
     tca_flag_deemed_supply = fields.Boolean(
-        string='Deemed Supply', copy=True,
+        string='Deemed Supply',
+        copy=True,
         help='Tick for deemed-supply scenarios (e.g. goods for own use). '
-             'BTAE-02 position 2. Buyer participant ID auto-switches to predefined endpoint 9900000097.',
+        'BTAE-02 position 2. Buyer participant ID auto-switches to predefined endpoint 9900000097.',
     )
     tca_flag_margin_scheme = fields.Boolean(
-        string='Margin Scheme', copy=True,
+        string='Margin Scheme',
+        copy=True,
         help='Tick for second-hand goods / margin-scheme transactions (BTAE-02 position 3).',
     )
     tca_flag_summary_invoice = fields.Boolean(
-        string='Summary Invoice', copy=True,
+        string='Summary Invoice',
+        copy=True,
         help='Tick for an invoice consolidating multiple supplies over a period (BTAE-02 position 4). '
-             'Requires Invoice Period Start/End.',
+        'Requires Invoice Period Start/End.',
     )
     tca_flag_continuous_supply = fields.Boolean(
-        string='Continuous Supply', copy=True,
+        string='Continuous Supply',
+        copy=True,
         help='Tick for subscriptions / recurring supplies (BTAE-02 position 5). '
-             'Requires Invoice Period Start/End, Contract Reference, and Billing Frequency.',
+        'Requires Invoice Period Start/End, Contract Reference, and Billing Frequency.',
     )
     tca_flag_disclosed_agent = fields.Boolean(
-        string='Disclosed Agent Billing', copy=True,
+        string='Disclosed Agent Billing',
+        copy=True,
         help='Tick when invoicing as a disclosed agent on behalf of a principal '
-             '(BTAE-02 position 6). Requires Principal TRN.',
+        '(BTAE-02 position 6). Requires Principal TRN.',
     )
     tca_flag_ecommerce = fields.Boolean(
-        string='E-commerce', copy=True,
+        string='E-commerce',
+        copy=True,
         help='Tick for online-channel transactions (BTAE-02 position 7).',
     )
     tca_flag_export = fields.Boolean(
-        string='Export', copy=True,
+        string='Export',
+        copy=True,
         help='Tick for an export supply to a buyer outside the UAE '
-             '(BTAE-02 position 8). The counterparty is off the UAE Peppol '
-             'network, so enter their Participant ID manually.',
+        '(BTAE-02 position 8). The counterparty is off the UAE Peppol '
+        'network, so enter their Participant ID manually.',
     )
 
     # ── Section expand/collapse toggle ────────────────────────────────────────
@@ -496,30 +517,36 @@ class AccountMove(models.Model):
         readonly=False,
         copy=True,
         help='Toggle on to reveal special transaction-type checkboxes. '
-             'Leave off for standard tax invoices (the most common case).',
+        'Leave off for standard tax invoices (the most common case).',
     )
 
     @api.depends(
-        'tca_flag_free_trade_zone', 'tca_flag_deemed_supply',
-        'tca_flag_margin_scheme', 'tca_flag_summary_invoice',
-        'tca_flag_continuous_supply', 'tca_flag_disclosed_agent',
-        'tca_flag_ecommerce', 'tca_flag_export',
+        'tca_flag_free_trade_zone',
+        'tca_flag_deemed_supply',
+        'tca_flag_margin_scheme',
+        'tca_flag_summary_invoice',
+        'tca_flag_continuous_supply',
+        'tca_flag_disclosed_agent',
+        'tca_flag_ecommerce',
+        'tca_flag_export',
     )
     def _compute_tca_show_special_flags(self):
         """Auto-expand the section whenever any flag is on. Preserves a
         manual True so the user can keep it open with no flags ticked yet,
         and preserves a manual False (the default) when no flag is on."""
         for move in self:
-            if any((
-                move.tca_flag_free_trade_zone,
-                move.tca_flag_deemed_supply,
-                move.tca_flag_margin_scheme,
-                move.tca_flag_summary_invoice,
-                move.tca_flag_continuous_supply,
-                move.tca_flag_disclosed_agent,
-                move.tca_flag_ecommerce,
-                move.tca_flag_export,
-            )):
+            if any(
+                (
+                    move.tca_flag_free_trade_zone,
+                    move.tca_flag_deemed_supply,
+                    move.tca_flag_margin_scheme,
+                    move.tca_flag_summary_invoice,
+                    move.tca_flag_continuous_supply,
+                    move.tca_flag_disclosed_agent,
+                    move.tca_flag_ecommerce,
+                    move.tca_flag_export,
+                )
+            ):
                 move.tca_show_special_flags = True
             elif not move.tca_show_special_flags:
                 # No flags AND not explicitly toggled on by the user.
@@ -554,16 +581,18 @@ class AccountMove(models.Model):
         Export (position 8) is a manual choice like the others — the user ticks
         it for a supply to a buyer outside the UAE."""
         for move in self:
-            move.tca_transaction_type_flags = ''.join((
-                '1' if move.tca_flag_free_trade_zone else '0',
-                '1' if move.tca_flag_deemed_supply else '0',
-                '1' if move.tca_flag_margin_scheme else '0',
-                '1' if move.tca_flag_summary_invoice else '0',
-                '1' if move.tca_flag_continuous_supply else '0',
-                '1' if move.tca_flag_disclosed_agent else '0',
-                '1' if move.tca_flag_ecommerce else '0',
-                '1' if move.tca_flag_export else '0',  # Export (BTAE-02 pos 8)
-            ))
+            move.tca_transaction_type_flags = ''.join(
+                (
+                    '1' if move.tca_flag_free_trade_zone else '0',
+                    '1' if move.tca_flag_deemed_supply else '0',
+                    '1' if move.tca_flag_margin_scheme else '0',
+                    '1' if move.tca_flag_summary_invoice else '0',
+                    '1' if move.tca_flag_continuous_supply else '0',
+                    '1' if move.tca_flag_disclosed_agent else '0',
+                    '1' if move.tca_flag_ecommerce else '0',
+                    '1' if move.tca_flag_export else '0',  # Export (BTAE-02 pos 8)
+                )
+            )
 
     tca_credit_note_reason = fields.Selection(
         selection=CREDIT_NOTE_REASONS,
@@ -581,7 +610,8 @@ class AccountMove(models.Model):
     # These now delegate to the new user-facing flag booleans. View conditions
     # can use either the derived ones or the new flag fields directly.
     tca_is_agent_billing = fields.Boolean(
-        compute='_compute_tca_derived_flag_booleans', string='Is Agent Billing',
+        compute='_compute_tca_derived_flag_booleans',
+        string='Is Agent Billing',
     )
     tca_is_summary_or_continuous = fields.Boolean(
         compute='_compute_tca_derived_flag_booleans',
@@ -594,7 +624,8 @@ class AccountMove(models.Model):
     tca_buyer_is_uae = fields.Boolean(compute='_compute_tca_buyer_is_uae')
 
     @api.depends(
-        'tca_flag_disclosed_agent', 'tca_flag_summary_invoice',
+        'tca_flag_disclosed_agent',
+        'tca_flag_summary_invoice',
         'tca_flag_continuous_supply',
     )
     def _compute_tca_derived_flag_booleans(self):
@@ -647,7 +678,7 @@ class AccountMove(models.Model):
             ('389', '389 — Self-Billing Tax Invoice'),
             ('261', '261 — Self-Billing Tax Credit Note'),
             ('480', '480 — Out-of-Scope Invoice'),
-            ('81',  '81 — Out-of-Scope Credit Note'),
+            ('81', '81 — Out-of-Scope Credit Note'),
         ],
         string='Invoice Type Code',
         compute='_compute_tca_invoice_type_code',
@@ -682,13 +713,13 @@ class AccountMove(models.Model):
         default=False,
         recursive=True,
         help='Tick to issue a Commercial Invoice — a document NOT subject to '
-             'UAE VAT (PINT AE code 480, or 81 for credit notes). '
-             'Examples: financial services, supplies outside the UAE VAT scope, '
-             'transactions with non-residents. Leave unticked for standard Tax '
-             'Invoices (codes 380 / 381). On a credit note that reverses an '
-             'invoice this value is auto-mirrored from the original (and is '
-             'readonly in the UI) so the PINT AE pair stays valid: 381 reverses '
-             '380, 81 reverses 480.',
+        'UAE VAT (PINT AE code 480, or 81 for credit notes). '
+        'Examples: financial services, supplies outside the UAE VAT scope, '
+        'transactions with non-residents. Leave unticked for standard Tax '
+        'Invoices (codes 380 / 381). On a credit note that reverses an '
+        'invoice this value is auto-mirrored from the original (and is '
+        'readonly in the UI) so the PINT AE pair stays valid: 381 reverses '
+        '380, 81 reverses 480.',
     )
 
     @api.depends('move_type', 'reversed_entry_id', 'reversed_entry_id.tca_is_out_of_scope')
@@ -746,7 +777,7 @@ class AccountMove(models.Model):
 
         # ── (2) Strip forbidden taxes ────────────────────────────────────────
         def _is_forbidden_for_oos(tax):
-            cat = (tax.tca_tax_category or '')
+            cat = tax.tca_tax_category or ''
             # S/AE/N are all standard-rated variants → forbidden on OOS.
             if cat in ('S', 'AE', 'N'):
                 return True
@@ -758,9 +789,7 @@ class AccountMove(models.Model):
             if not forbidden:
                 continue
             label = line.name or (line.product_id and line.product_id.name) or _('(unnamed line)')
-            removed_per_line.append(
-                f'{label} — {", ".join(forbidden.mapped("name"))}'
-            )
+            removed_per_line.append(f'{label} — {", ".join(forbidden.mapped("name"))}')
             line.tax_ids = line.tax_ids - forbidden
 
         # ── (3) Auto-apply OOS tax to lines without any tax remaining ───────
@@ -781,17 +810,21 @@ class AccountMove(models.Model):
         # ── Assemble single combined warning if any of the three acted ──────
         sections = []
         if removed_per_line:
-            sections.append(_(
-                'Removed taxes (UAE FTA: Out-of-Scope invoices cannot carry VAT):\n%s',
-                '\n'.join(f'  • {r}' for r in removed_per_line),
-            ))
+            sections.append(
+                _(
+                    'Removed taxes (UAE FTA: Out-of-Scope invoices cannot carry VAT):\n%s',
+                    '\n'.join(f'  • {r}' for r in removed_per_line),
+                )
+            )
         if applied_to_lines:
-            sections.append(_(
-                'Auto-applied "%(name)s" (Out-of-Scope, 0%% rate, category O) to '
-                'satisfy PINT AE rule ibr-sr-58 (line tax category is mandatory):\n%(list)s',
-                name=oos_tax.name,
-                list='\n'.join(f'  • {label}' for label in applied_to_lines),
-            ))
+            sections.append(
+                _(
+                    'Auto-applied "%(name)s" (Out-of-Scope, 0%% rate, category O) to '
+                    'satisfy PINT AE rule ibr-sr-58 (line tax category is mandatory):\n%(list)s',
+                    name=oos_tax.name,
+                    list='\n'.join(f'  • {label}' for label in applied_to_lines),
+                )
+            )
 
         if sections:
             return {
@@ -803,14 +836,15 @@ class AccountMove(models.Model):
 
     # Computed booleans for view visibility (Odoo 17 cannot do slice/in on Selection in invisible)
     tca_show_credit_note_fields = fields.Boolean(
-        compute='_compute_tca_type_visibility', store=False,
+        compute='_compute_tca_type_visibility',
+        store=False,
     )
     tca_is_out_of_scope_type = fields.Boolean(
-        compute='_compute_tca_type_visibility', store=False,
+        compute='_compute_tca_type_visibility',
+        store=False,
     )
 
-    @api.depends('move_type', 'tca_is_out_of_scope',
-                 'journal_id.is_self_billing')
+    @api.depends('move_type', 'tca_is_out_of_scope', 'journal_id.is_self_billing')
     def _compute_tca_invoice_type_code(self):
         """
         Resolve the PINT AE document type code from move direction, OOS
@@ -837,8 +871,7 @@ class AccountMove(models.Model):
             if move.tca_is_inbound:
                 continue
             is_self_bill = (
-                move.move_type in ('in_invoice', 'in_refund')
-                and move.journal_id.is_self_billing
+                move.move_type in ('in_invoice', 'in_refund') and move.journal_id.is_self_billing
             )
             if move.move_type in ('out_invoice', 'in_invoice'):
                 if is_self_bill:
@@ -869,16 +902,26 @@ class AccountMove(models.Model):
         is_refund = self.move_type in ('out_refund', 'in_refund')
         if is_refund and code in self._TYPE_INVOICE_TO_REFUND:
             self.tca_invoice_type_code = self._TYPE_INVOICE_TO_REFUND[code]
-            return {'warning': {
-                'title': _('Invalid Type Code'),
-                'message': _('Credit notes cannot use an invoice type code. Reset to %s.', self.tca_invoice_type_code),
-            }}
+            return {
+                'warning': {
+                    'title': _('Invalid Type Code'),
+                    'message': _(
+                        'Credit notes cannot use an invoice type code. Reset to %s.',
+                        self.tca_invoice_type_code,
+                    ),
+                }
+            }
         if not is_refund and code in self._TYPE_REFUND_TO_INVOICE:
             self.tca_invoice_type_code = self._TYPE_REFUND_TO_INVOICE[code]
-            return {'warning': {
-                'title': _('Invalid Type Code'),
-                'message': _('Invoices cannot use a credit note type code. Reset to %s.', self.tca_invoice_type_code),
-            }}
+            return {
+                'warning': {
+                    'title': _('Invalid Type Code'),
+                    'message': _(
+                        'Invoices cannot use a credit note type code. Reset to %s.',
+                        self.tca_invoice_type_code,
+                    ),
+                }
+            }
 
     @api.model_create_multi
     def create(self, vals_list):
@@ -927,6 +970,7 @@ class AccountMove(models.Model):
         # we don't see the journal flag.
         for move in self:
             move.tca_is_self_billing = move.tca_invoice_type_code in ('389', '261')
+
     tca_contract_value = fields.Char(
         string='Contract Value',
         copy=True,
@@ -937,12 +981,12 @@ class AccountMove(models.Model):
     )
     tca_payment_means_code = fields.Selection(
         selection=[
-            ('10',  '10 — In cash'),
-            ('30',  '30 — Credit transfer'),
-            ('42',  '42 — Payment to bank account'),
-            ('48',  '48 — Bank card'),
-            ('49',  '49 — Direct debit'),
-            ('57',  '57 — Standing agreement'),
+            ('10', '10 — In cash'),
+            ('30', '30 — Credit transfer'),
+            ('42', '42 — Payment to bank account'),
+            ('48', '48 — Bank card'),
+            ('49', '49 — Direct debit'),
+            ('57', '57 — Standing agreement'),
             ('ZZZ', 'ZZZ — Mutually defined'),
         ],
         string='Payment Means Code',
@@ -1001,7 +1045,7 @@ class AccountMove(models.Model):
         string='Buyer Reference (IBT-010)',
         copy=True,
         help='IBT-010: A reference assigned by the buyer (e.g. purchase order number). '
-             'Carried over to credit notes — the same PO usually applies.',
+        'Carried over to credit notes — the same PO usually applies.',
     )
     tca_project_reference = fields.Char(
         string='Project Reference (IBT-011)',
@@ -1088,14 +1132,16 @@ class AccountMove(models.Model):
             if not buyer._tca_is_uae_party():
                 continue
             if not re_uae_format.match(pid):
-                raise ValidationError(_(
-                    '"Buyer Participant ID" for UAE customers must be either:\n'
-                    '  • 10-digit Peppol Participant ID: starts with 1 (e.g. 1234567890), or\n'
-                    '  • One of the PINT AE predefined endpoints (9900000097/98/99).\n'
-                    'The 15-digit TRN goes in the customer\'s "Tax ID" field, not here.\n'
-                    'Current: "%s".',
-                    pid,
-                ))
+                raise ValidationError(
+                    _(
+                        '"Buyer Participant ID" for UAE customers must be either:\n'
+                        '  • 10-digit Peppol Participant ID: starts with 1 (e.g. 1234567890), or\n'
+                        '  • One of the PINT AE predefined endpoints (9900000097/98/99).\n'
+                        'The 15-digit TRN goes in the customer\'s "Tax ID" field, not here.\n'
+                        'Current: "%s".',
+                        pid,
+                    )
+                )
 
     @api.constrains('tca_seller_participant_id', 'partner_id')
     def _check_tca_seller_participant_id_format(self):
@@ -1115,14 +1161,16 @@ class AccountMove(models.Model):
             if not seller._tca_is_uae_party():
                 continue
             if not re_uae_format.match(pid):
-                raise ValidationError(_(
-                    '"Seller Participant ID" for UAE sellers must be either:\n'
-                    '  • 10-digit Peppol Participant ID: starts with 1 (e.g. 1234567890), or\n'
-                    '  • One of the PINT AE predefined endpoints (9900000097/98/99).\n'
-                    'The 15-digit TRN goes in the "Tax ID" field, not here.\n'
-                    'Current: "%s".',
-                    pid,
-                ))
+                raise ValidationError(
+                    _(
+                        '"Seller Participant ID" for UAE sellers must be either:\n'
+                        '  • 10-digit Peppol Participant ID: starts with 1 (e.g. 1234567890), or\n'
+                        '  • One of the PINT AE predefined endpoints (9900000097/98/99).\n'
+                        'The 15-digit TRN goes in the "Tax ID" field, not here.\n'
+                        'Current: "%s".',
+                        pid,
+                    )
+                )
 
     @api.constrains('tca_transaction_type_flags')
     def _check_tca_transaction_type_flags_format(self):
@@ -1131,11 +1179,13 @@ class AccountMove(models.Model):
             if not flags:
                 continue  # required-check handled at posting
             if not self._RE_FLAGS_8.match(flags):
-                raise ValidationError(_(
-                    '"Transaction Type Flags" must be exactly 8 digits, each 0 or 1. '
-                    'Example: "00000000" for standard, "00000001" for export. Current: "%s".',
-                    flags,
-                ))
+                raise ValidationError(
+                    _(
+                        '"Transaction Type Flags" must be exactly 8 digits, each 0 or 1. '
+                        'Example: "00000000" for standard, "00000001" for export. Current: "%s".',
+                        flags,
+                    )
+                )
 
     @api.constrains('tca_principal_id')
     def _check_tca_principal_id_format(self):
@@ -1144,9 +1194,12 @@ class AccountMove(models.Model):
             if not pid:
                 continue
             if not self._RE_TRN_15.match(pid):
-                raise ValidationError(_(
-                    '"Principal TRN" must be exactly 15 digits. Current: "%s".', pid,
-                ))
+                raise ValidationError(
+                    _(
+                        '"Principal TRN" must be exactly 15 digits. Current: "%s".',
+                        pid,
+                    )
+                )
 
     @api.constrains('tca_delivery_party_trn')
     def _check_tca_delivery_party_trn_format(self):
@@ -1155,9 +1208,12 @@ class AccountMove(models.Model):
             if not trn:
                 continue
             if not self._RE_TRN_15.match(trn):
-                raise ValidationError(_(
-                    '"Deliver-to Party TRN" must be exactly 15 digits. Current: "%s".', trn,
-                ))
+                raise ValidationError(
+                    _(
+                        '"Deliver-to Party TRN" must be exactly 15 digits. Current: "%s".',
+                        trn,
+                    )
+                )
 
     @api.depends('partner_id', 'partner_id.tca_emirate', 'partner_id.state_id')
     def _compute_tca_buyer_emirate(self):
@@ -1241,10 +1297,7 @@ class AccountMove(models.Model):
                 move.tca_buyer_legal_id_type = partner.tca_legal_id_type
             if not move.tca_buyer_trade_license:
                 move.tca_buyer_trade_license = (
-                    partner.tca_trade_license
-                    or partner.company_registry
-                    or partner.vat
-                    or False
+                    partner.tca_trade_license or partner.company_registry or partner.vat or False
                 )
             if not move.tca_buyer_legal_authority and partner.tca_legal_authority:
                 move.tca_buyer_legal_authority = partner.tca_legal_authority
@@ -1282,15 +1335,20 @@ class AccountMove(models.Model):
             if self.tca_is_self_billing
             else partner
         )
+        # Preserve ANY non-blank value — it is always the user's. Predefined
+        # 9900000xxx IDs are NOT treated as "auto-set" here: nothing auto-sets
+        # them any more (foreign / deemed buyers resolve to '' for manual
+        # entry), so membership in ANON_BUYER_PIDS no longer implies we wrote
+        # it. Testing it here would silently discard a hand-typed 9900000098 on
+        # the next partner edit — and would contradict the compute above, which
+        # preserves it. The elif still refreshes a stale endpoint when the
+        # partner itself changed to a foreign party.
         current_pid = (self.tca_buyer_participant_id or '').strip()
-        if not current_pid or current_pid in ANON_BUYER_PIDS:
-            resolved = self._tca_resolve_buyer_participant_id(
-                buyer_party, self.tca_transaction_type_flags,
+        if not current_pid:
+            self.tca_buyer_participant_id = self._tca_resolve_buyer_participant_id(
+                buyer_party,
+                self.tca_transaction_type_flags,
             )
-            # Preserve a previously-set non-empty value if the helper returns ''
-            # (e.g. partner has no country yet — common during draft creation).
-            if resolved or not current_pid:
-                self.tca_buyer_participant_id = resolved
         elif buyer_party.country_id and not buyer_party._tca_is_uae_party():
             # Switched to a foreign counterparty — clear the stale auto-filled
             # endpoint left from a previous UAE partner. The buyer is off the
@@ -1308,10 +1366,7 @@ class AccountMove(models.Model):
             self.tca_buyer_legal_id_type = partner.tca_legal_id_type
         if not self.tca_buyer_trade_license:
             self.tca_buyer_trade_license = (
-                partner.tca_trade_license
-                or partner.company_registry
-                or partner.vat
-                or False
+                partner.tca_trade_license or partner.company_registry or partner.vat or False
             )
         if not self.tca_buyer_legal_authority and partner.tca_legal_authority:
             self.tca_buyer_legal_authority = partner.tca_legal_authority
@@ -1346,8 +1401,7 @@ class AccountMove(models.Model):
         party has no VAT set — user types one manually in that case."""
         self.ensure_one()
         is_self_bill = (
-            self.move_type in ('in_invoice', 'in_refund')
-            and self.journal_id.is_self_billing
+            self.move_type in ('in_invoice', 'in_refund') and self.journal_id.is_self_billing
         )
         buyer = (
             self.company_id.partner_id.commercial_partner_id
@@ -1413,8 +1467,7 @@ class AccountMove(models.Model):
             return
         # Resolve the buyer party — same logic as the compute / partner onchange.
         is_self_bill = (
-            self.move_type in ('in_invoice', 'in_refund')
-            and self.journal_id.is_self_billing
+            self.move_type in ('in_invoice', 'in_refund') and self.journal_id.is_self_billing
         )
         buyer = (
             self.company_id.partner_id.commercial_partner_id
@@ -1434,25 +1487,35 @@ class AccountMove(models.Model):
         The counterparty is the customer on a normal invoice, or the vendor
         (seller slot) on a self-bill — the self-bill buyer is our own UAE
         company and is left untouched.
+
+        Both directions delegate to _tca_resolve_buyer_participant_id rather
+        than reading peppol_endpoint directly: the helper already returns ''
+        for an export, and it also honours the rules a direct read would
+        bypass — Deemed Supply must stay blank, and a foreign counterparty
+        never gets an auto-filled endpoint. Writing the endpoint here directly
+        re-introduced both bugs (untick Export on a deemed-supply or foreign
+        invoice and the ID came back).
         """
+        # Build the flags string explicitly instead of trusting
+        # tca_transaction_type_flags to have recomputed already — compute
+        # ordering within a single onchange is not guaranteed. Position 8 comes
+        # from the flag we just toggled; the rest (incl. Deemed Supply at
+        # position 2) carries over from the stored string.
+        flags = (self.tca_transaction_type_flags or '00000000').ljust(8, '0')
+        flags = flags[:7] + ('1' if self.tca_flag_export else '0')
+
         is_self_bill = (
-            self.move_type in ('in_invoice', 'in_refund')
-            and self.journal_id.is_self_billing
+            self.move_type in ('in_invoice', 'in_refund') and self.journal_id.is_self_billing
+        )
+        counterparty = self.partner_id.commercial_partner_id
+        resolved = (
+            self._tca_resolve_buyer_participant_id(counterparty, flags) if counterparty else ''
         )
         if is_self_bill:
             # Counterparty sits in the SELLER slot (the vendor).
-            if self.tca_flag_export:
-                self.tca_seller_participant_id = ''
-            else:
-                vendor = self.partner_id.commercial_partner_id
-                self.tca_seller_participant_id = (vendor.peppol_endpoint or '') if vendor else ''
+            self.tca_seller_participant_id = resolved
         else:
-            # Counterparty is the customer (buyer slot).
-            if self.tca_flag_export:
-                self.tca_buyer_participant_id = ''
-            else:
-                buyer = self.partner_id.commercial_partner_id
-                self.tca_buyer_participant_id = (buyer.peppol_endpoint or '') if buyer else ''
+            self.tca_buyer_participant_id = resolved
 
     # ──────────────────────────────────────────────────────────────────────────
     # COMPUTED HELPERS
@@ -1502,11 +1565,13 @@ class AccountMove(models.Model):
         (in_* on a regular journal) must NOT be queued for TCA outbound.
         """
         self.ensure_one()
-        if not (self.company_id.tca_is_active
-                and self.tca_create_einvoice
-                and self.state == 'posted'
-                and not self.tca_is_inbound
-                and self.tca_move_state in ('not_sent', 'error', 'rejected')):
+        if not (
+            self.company_id.tca_is_active
+            and self.tca_create_einvoice
+            and self.state == 'posted'
+            and not self.tca_is_inbound
+            and self.tca_move_state in ('not_sent', 'error', 'rejected')
+        ):
             return False
         if self.tca_is_self_billing:
             return True
@@ -1528,15 +1593,24 @@ class AccountMove(models.Model):
         blocked = self.filtered(lambda m: m.tca_move_state in _CANCEL_BLOCKED_STATES)
         if blocked:
             names = ', '.join(blocked[:5].mapped('name'))
-            raise UserError(_(
-                'Cannot cancel invoice(s) %s: they have already been submitted to the '
-                'TCA Peppol network and cannot be retracted.\n\n'
-                'To correct an error, issue a credit note instead.',
-                names
-            ))
+            raise UserError(
+                _(
+                    'Cannot cancel invoice(s) %s: they have already been submitted to the '
+                    'TCA Peppol network and cannot be retracted.\n\n'
+                    'To correct an error, issue a credit note instead.',
+                    names,
+                )
+            )
         # Mark non-submitted invoices as cancelled in TCA state
         for move in self:
-            if move.tca_move_state in ('not_sent', 'error', 'rejected', 'uploading', 'submitted', 'inbound_received'):
+            if move.tca_move_state in (
+                'not_sent',
+                'error',
+                'rejected',
+                'uploading',
+                'submitted',
+                'inbound_received',
+            ):
                 move.tca_move_state = 'cancelled'
         return super().button_cancel()
 
@@ -1549,12 +1623,14 @@ class AccountMove(models.Model):
         blocked = self.filtered(lambda m: m.tca_move_state in _CANCEL_BLOCKED_STATES)
         if blocked:
             names = ', '.join(blocked[:5].mapped('name'))
-            raise UserError(_(
-                'Cannot reset invoice(s) %s to draft: they have already been submitted to the '
-                'TCA Peppol network.\n\n'
-                'Issue a credit note to correct any errors.',
-                names
-            ))
+            raise UserError(
+                _(
+                    'Cannot reset invoice(s) %s to draft: they have already been submitted to the '
+                    'TCA Peppol network.\n\n'
+                    'Issue a credit note to correct any errors.',
+                    names,
+                )
+            )
         result = super().button_draft()
         # Reset TCA state so the invoice is eligible for re-submission after fixing
         for move in self:
@@ -1594,8 +1670,7 @@ class AccountMove(models.Model):
         # invoices/credit-notes plus self-bills (in_* on a self-billing
         # journal). Plain vendor bills carry the supplier's currency.
         is_issued_by_us = (
-            self.move_type in ('out_invoice', 'out_refund')
-            or self.tca_is_self_billing
+            self.move_type in ('out_invoice', 'out_refund') or self.tca_is_self_billing
         )
         if is_issued_by_us and self.currency_id.name != 'AED':
             errs['pint_ae_currency_aed'] = _(
@@ -1617,7 +1692,7 @@ class AccountMove(models.Model):
                 '"Buyer Participant ID" is required. '
                 'Enter the buyer\'s Peppol Participant ID in the "Invoice & Buyer" section. '
                 'Use one of the FTA predefined endpoints (9900000097 / 9900000098 / '
-                '9900000099) if the buyer isn\'t on the Peppol network.'
+                "9900000099) if the buyer isn't on the Peppol network."
             )
         elif buyer_pid != '1XXXXXXXXX' and (not buyer_pid.isdigit() or len(buyer_pid) != 10):
             errs['pint_ae_buyer_pid_format'] = _(
@@ -1632,7 +1707,7 @@ class AccountMove(models.Model):
                 '"Seller Participant ID" is required. '
                 'Enter the seller\'s Peppol Participant ID in the "Invoice & Buyer" section. '
                 'Use one of the FTA predefined endpoints (9900000097 / 9900000098 / '
-                '9900000099) if the seller isn\'t on the Peppol network.'
+                "9900000099) if the seller isn't on the Peppol network."
             )
         elif not seller_pid.isdigit() or len(seller_pid) != 10:
             errs['pint_ae_seller_pid_format'] = _(
@@ -1673,15 +1748,18 @@ class AccountMove(models.Model):
         flags_ok = len(flags) == 8 and all(c in '01' for c in flags)
         if flags_ok and flags[0] == '1' and not (self.tca_buyer_beneficiary_id or '').strip():
             errs['pint_ae_ftz_beneficiary'] = _(
-                '[ibr-007-ae] Free Trade Zone flag is set — '
-                '"Buyer Beneficiary ID" is required.'
+                '[ibr-007-ae] Free Trade Zone flag is set — "Buyer Beneficiary ID" is required.'
             )
         if flags_ok and flags[5] == '1' and not self.tca_principal_id:
             errs['pint_ae_principal'] = _(
                 'Disclosed Agent flag is set — "Principal TRN" is required. '
                 'Set it in the "Transaction Type" section.'
             )
-        if flags_ok and flags[3] == '1' and (not self.tca_invoice_period_start or not self.tca_invoice_period_end):
+        if (
+            flags_ok
+            and flags[3] == '1'
+            and (not self.tca_invoice_period_start or not self.tca_invoice_period_end)
+        ):
             errs['pint_ae_summary_period'] = _(
                 '[ibr-138-ae] Summary Invoice flag is set — '
                 '"Invoice Period Start" and "End" dates are required.'
@@ -1711,7 +1789,8 @@ class AccountMove(models.Model):
                 errs['pint_ae_oos_flags'] = _(
                     '[ibr-157-ae] Out-of-Scope invoice type (%(code)s) cannot be combined '
                     'with: %(flags)s. Either change the invoice type or unset those flags.',
-                    code=type_code, flags=', '.join(incompat),
+                    code=type_code,
+                    flags=', '.join(incompat),
                 )
 
         # ibr-142-ae: E-commerce (pos 7) requires a complete delivery address.
@@ -1772,7 +1851,11 @@ class AccountMove(models.Model):
                 'an Invoice Note (IBT-022) must be provided to describe the frequency.'
             )
 
-        if self.tca_tax_point_date and self.invoice_date and self.tca_tax_point_date >= self.invoice_date:
+        if (
+            self.tca_tax_point_date
+            and self.invoice_date
+            and self.tca_tax_point_date >= self.invoice_date
+        ):
             errs['pint_ae_tax_point_date'] = _(
                 '[ibr-141-ae] "Tax Point Date" (IBT-007) must be strictly before "Invoice Date" (IBT-002). '
                 'Tax point: %(tp)s, Invoice date: %(d)s.',
@@ -1793,7 +1876,9 @@ class AccountMove(models.Model):
             errs['pint_ae_supplier_name'] = _(
                 'Your company name (IBT-027) is missing. Set it in Settings → Companies.'
             )
-        if not getattr(supplier, 'peppol_eas', None) or not getattr(supplier, 'peppol_endpoint', None):
+        if not getattr(supplier, 'peppol_eas', None) or not getattr(
+            supplier, 'peppol_endpoint', None
+        ):
             errs['pint_ae_supplier_peppol'] = _(
                 'Your company\'s "Peppol EAS" and "Peppol Endpoint" (IBT-034) are missing.'
             )
@@ -1811,24 +1896,16 @@ class AccountMove(models.Model):
                 'Your company\'s "Street" (IBT-035) address is missing.'
             )
         if not supplier.city:
-            errs['pint_ae_supplier_city'] = _(
-                'Your company\'s "City" (IBT-037) is missing.'
-            )
+            errs['pint_ae_supplier_city'] = _('Your company\'s "City" (IBT-037) is missing.')
         if not supplier.country_id:
-            errs['pint_ae_supplier_country'] = _(
-                'Your company\'s "Country" (IBT-040) is missing.'
-            )
+            errs['pint_ae_supplier_country'] = _('Your company\'s "Country" (IBT-040) is missing.')
         if supplier._tca_is_uae_party() and supplier._tca_emirate() not in UAE_EMIRATES:
             errs['pint_ae_supplier_emirate'] = _(
                 'Your company\'s "Emirate" must be set to one of: '
                 'AUH, DXB, SHJ, UAQ, FUJ, AJM, RAK.'
             )
 
-        seller_legal_reg = (
-            supplier.tca_trade_license
-            or supplier.company_registry
-            or supplier.vat
-        )
+        seller_legal_reg = supplier.tca_trade_license or supplier.company_registry or supplier.vat
         if not seller_legal_reg:
             errs['pint_ae_supplier_legal_reg'] = _(
                 'Your company\'s "Trade License / Registration ID" (IBT-030) is missing. '
@@ -1864,7 +1941,8 @@ class AccountMove(models.Model):
             errs['pint_ae_customer_name'] = _('Customer name (IBT-044) is missing.')
         if not customer.country_id:
             errs['pint_ae_customer_country'] = _(
-                'Customer "%s" is missing a "Country" (IBT-055).', customer.name,
+                'Customer "%s" is missing a "Country" (IBT-055).',
+                customer.name,
             )
         # Participant-ID enforcement lives on the MOVE field
         # (`tca_buyer_participant_id`, validated in _tca_check_document).
@@ -1884,11 +1962,13 @@ class AccountMove(models.Model):
                 )
             if not customer.street:
                 errs['pint_ae_customer_street'] = _(
-                    'Customer "%s" is missing "Street" (IBT-050).', customer.name,
+                    'Customer "%s" is missing "Street" (IBT-050).',
+                    customer.name,
                 )
             if not customer.city:
                 errs['pint_ae_customer_city'] = _(
-                    'Customer "%s" is missing "City" (IBT-052).', customer.name,
+                    'Customer "%s" is missing "City" (IBT-052).',
+                    customer.name,
                 )
             if self.tca_buyer_emirate not in UAE_EMIRATES:
                 errs['pint_ae_customer_emirate'] = _(
@@ -1929,25 +2009,33 @@ class AccountMove(models.Model):
             return errs
 
         for line in product_lines:
-            label = line.name or (line.product_id and line.product_id.name) or _('Line %s', line.sequence)
+            label = (
+                line.name
+                or (line.product_id and line.product_id.name)
+                or _('Line %s', line.sequence)
+            )
             if not line.quantity:
                 errs[f'pint_ae_line_qty_{line.id}'] = _(
-                    'Line "%s": "Quantity" (IBT-129) is required and cannot be zero.', label,
+                    'Line "%s": "Quantity" (IBT-129) is required and cannot be zero.',
+                    label,
                 )
                 return errs
             if not line.product_uom_id:
                 errs[f'pint_ae_line_uom_{line.id}'] = _(
-                    'Line "%s": "Unit of Measure" (IBT-130) is required.', label,
+                    'Line "%s": "Unit of Measure" (IBT-130) is required.',
+                    label,
                 )
                 return errs
             if not line.name and not (line.product_id and line.product_id.name):
                 errs[f'pint_ae_line_desc_{line.id}'] = _(
-                    'Line %s: "Description" or product name (IBT-153) is required.', line.sequence,
+                    'Line %s: "Description" or product name (IBT-153) is required.',
+                    line.sequence,
                 )
                 return errs
             if not line.tax_ids:
                 errs[f'pint_ae_line_tax_{line.id}'] = _(
-                    'Line "%s": at least one Tax must be applied.', label,
+                    'Line "%s": at least one Tax must be applied.',
+                    label,
                 )
                 return errs
             has_rc = any(t.tca_tax_category == 'AE' for t in line.tax_ids)
@@ -1963,24 +2051,28 @@ class AccountMove(models.Model):
                 return errs
             if has_rc and not line.tca_rc_description:
                 errs[f'pint_ae_line_rc_{line.id}'] = _(
-                    'Line "%s": Reverse Charge tax — "Goods/Services Type" is mandatory.', label,
+                    'Line "%s": Reverse Charge tax — "Goods/Services Type" is mandatory.',
+                    label,
                 )
                 return errs
             # Exempt (E) line MUST carry a VAT exemption reason code (IBT-186,
             # schematron ibr-167-ae). Accept it either on the line (override)
             # or on the tax record — the JSON builder uses the same precedence.
             exempt_tax = next(
-                (t for t in line.tax_ids if t.tca_tax_category == 'E'), None,
+                (t for t in line.tax_ids if t.tca_tax_category == 'E'),
+                None,
             )
             if exempt_tax:
                 reason = (line.tca_vat_exemption_reason_code or '').strip() or (
-                    exempt_tax.tca_exemption_reason_code or '')
+                    exempt_tax.tca_exemption_reason_code or ''
+                )
                 if not reason:
                     errs[f'pint_ae_line_exempt_reason_{line.id}'] = _(
                         '[ibr-167-ae] Line "%s": this line is Exempt (E) — a '
                         '"VAT Exemption Reason Code" is required. Enter it on '
                         'the line, or set a default on the tax "%s".',
-                        label, exempt_tax.name,
+                        label,
+                        exempt_tax.name,
                     )
                     return errs
 
@@ -1995,15 +2087,20 @@ class AccountMove(models.Model):
                         errs['pint_ae_oos_vat_missing'] = _(
                             'Invoice type %s requires all taxes to have a UAE VAT category. '
                             'Tax "%s" on line "%s" has no category set.',
-                            type_code, tax.name, line.name or str(line.id),
+                            type_code,
+                            tax.name,
+                            line.name or str(line.id),
                         )
                         return errs
                     if cat not in allowed:
                         errs['pint_ae_oos_vat'] = _(
                             'Invoice type %s only allows VAT categories: %s. '
                             'Line "%s" uses tax "%s" with category "%s".',
-                            type_code, allowed_str,
-                            line.name or str(line.id), tax.name, cat,
+                            type_code,
+                            allowed_str,
+                            line.name or str(line.id),
+                            tax.name,
+                            cat,
                         )
                         return errs
 
@@ -2013,7 +2110,9 @@ class AccountMove(models.Model):
                     errs['pint_ae_s_rate'] = _(
                         '[ibr-190-ae] Standard rated (%s) VAT must be exactly 5.00%%. '
                         'Tax "%s" has rate %.2f%%.',
-                        tax.tca_tax_category, tax.name, tax.amount,
+                        tax.tca_tax_category,
+                        tax.name,
+                        tax.amount,
                     )
                     return errs
 
@@ -2060,7 +2159,7 @@ class AccountMove(models.Model):
             _logger.exception('TCA: failed to render PINT AE XML for validation')
             errors.append(_('Internal error rendering PINT AE XML: %s', exc))
             return errors
-        for be in (build_errors or ()):
+        for be in build_errors or ():
             if be:
                 errors.append(str(be).strip())
         return errors
@@ -2156,18 +2255,28 @@ class AccountMove(models.Model):
 
         # ── Legal registration id (IBT-030, buyer overrides win) ─────────
         if is_buyer:
-            trade_license = (self.tca_buyer_trade_license or partner.tca_trade_license
-                             or partner.company_registry or vat_identifier)
+            trade_license = (
+                self.tca_buyer_trade_license
+                or partner.tca_trade_license
+                or partner.company_registry
+                or vat_identifier
+            )
             legal_type = self.tca_buyer_legal_id_type or partner.tca_legal_id_type
             legal_authority = self.tca_buyer_legal_authority or partner.tca_legal_authority
-            passport_country = (self.tca_buyer_passport_country_id.code
-                                if self.tca_buyer_passport_country_id
-                                else (partner.tca_passport_country_id.code if partner.tca_passport_country_id else ''))
+            passport_country = (
+                self.tca_buyer_passport_country_id.code
+                if self.tca_buyer_passport_country_id
+                else (
+                    partner.tca_passport_country_id.code if partner.tca_passport_country_id else ''
+                )
+            )
         else:
             trade_license = partner.tca_trade_license or partner.company_registry or vat_identifier
             legal_type = partner.tca_legal_id_type
             legal_authority = partner.tca_legal_authority
-            passport_country = partner.tca_passport_country_id.code if partner.tca_passport_country_id else ''
+            passport_country = (
+                partner.tca_passport_country_id.code if partner.tca_passport_country_id else ''
+            )
 
         party = {
             'name': partner.name or '',
@@ -2209,7 +2318,11 @@ class AccountMove(models.Model):
         net = line.price_subtotal
         # VAT amount must be 0 for Z / AE / E / O per §9 (buyer self-accounts or
         # no VAT); use the actual line delta otherwise.
-        vat_amt = 0.0 if cat in self._TCA_ZERO_VAT_CATEGORIES else (line.price_total - line.price_subtotal)
+        vat_amt = (
+            0.0
+            if cat in self._TCA_ZERO_VAT_CATEGORIES
+            else (line.price_total - line.price_subtotal)
+        )
         item_name = line.name or (line.product_id.name if line.product_id else '') or ''
         commodity = line.tca_effective_commodity_type or ''
         # Net unit price (after line discount); Odoo price_unit is pre-discount.
@@ -2227,7 +2340,8 @@ class AccountMove(models.Model):
         if cat == 'E':
             # Per-line override wins; fall back to the reason code on the tax.
             reason_code = (line.tca_vat_exemption_reason_code or '').strip() or (
-                vat_tax.tca_exemption_reason_code if vat_tax else '')
+                vat_tax.tca_exemption_reason_code if vat_tax else ''
+            )
             if reason_code:
                 vat_info['vat_exemption_reason_code'] = reason_code
             if vat_tax and vat_tax.tca_exemption_reason:
@@ -2237,28 +2351,34 @@ class AccountMove(models.Model):
             'line_id': str(seq),
             'invoiced_quantity': line.quantity,
             'invoiced_quantity_unit_of_measure_code': (
-                line.product_uom_id._get_unece_code() if line.product_uom_id else 'C62'),
+                line.product_uom_id._get_unece_code() if line.product_uom_id else 'C62'
+            ),
             'line_net_amount': net,
             'item_net_price': net_unit,
             'item_gross_price': line.price_unit,
             'item_price_base_quantity': 1,
             'item_name': item_name,
-            'item_description': item_name,     # IBT-154 mandatory — mirror name
-            'item_type': commodity,            # BTAE-13 G/S/B
-            'line_amount_in_aed': net + vat_amt,     # BTAE-10
+            'item_description': item_name,  # IBT-154 mandatory — mirror name
+            'item_type': commodity,  # BTAE-13 G/S/B
+            'line_amount_in_aed': net + vat_amt,  # BTAE-10
             'vat_info': [vat_info],
         }
         # BTAE-08 (VAT line amount) must be ABSENT on Exempt lines — schematron
         # ibr-163-ae. Emit it for every other category (0 is valid for Z/O/AE).
         if cat != 'E':
-            d['vat_line_amount_in_aed'] = vat_amt   # BTAE-08 (canonical key)
+            d['vat_line_amount_in_aed'] = vat_amt  # BTAE-08 (canonical key)
         # HS (goods) / SAC (services) go in their own arrays.
         if commodity in ('G', 'B') and line.tca_hs_code:
-            d['classifications'] = [{'classification_identifier': line.tca_hs_code,
-                                     'classification_identifier_scheme': 'HS'}]
+            d['classifications'] = [
+                {
+                    'classification_identifier': line.tca_hs_code,
+                    'classification_identifier_scheme': 'HS',
+                }
+            ]
         if commodity in ('S', 'B') and line.tca_service_accounting_code:
-            d['service_accounting_codes'] = [{'code': line.tca_service_accounting_code,
-                                              'scheme_identifier': 'SAC'}]
+            d['service_accounting_codes'] = [
+                {'code': line.tca_service_accounting_code, 'scheme_identifier': 'SAC'}
+            ]
         if cat == 'AE':
             if line.tca_rc_description:
                 d['type_of_goods_or_services'] = line.tca_rc_description
@@ -2285,18 +2405,21 @@ class AccountMove(models.Model):
             cat = vat_tax.tca_tax_category if vat_tax else ''
             rate = vat_tax.amount if vat_tax else 0.0
             key = (cat, rate)
-            g = groups.setdefault(key, {
-                'vat_category_code': cat,
-                'tax_scheme_code': 'VAT',
-                'taxable_amount': 0.0,
-                'tax_amount': 0.0,
-            })
+            g = groups.setdefault(
+                key,
+                {
+                    'vat_category_code': cat,
+                    'tax_scheme_code': 'VAT',
+                    'taxable_amount': 0.0,
+                    'tax_amount': 0.0,
+                },
+            )
             # VAT category rate (IBT-119) must be ABSENT for E/O — ibr-119-ae.
             if cat not in self._TCA_NO_RATE_CATEGORIES:
                 g['vat_category_rate'] = rate
             g['taxable_amount'] += line.price_subtotal
             if cat not in self._TCA_ZERO_VAT_CATEGORIES:
-                g['tax_amount'] += (line.price_total - line.price_subtotal)
+                g['tax_amount'] += line.price_total - line.price_subtotal
         return list(groups.values())
 
     def _tca_json_totals(self):
@@ -2330,8 +2453,11 @@ class AccountMove(models.Model):
             'invoice_currency_code': self.currency_id.name or 'AED',
             'process_control': {
                 'profile_id': PINT_AE_SELFBILLING_PROFILE_ID if is_selfbill else PINT_AE_PROFILE_ID,
-                'customization_id': (PINT_AE_SELFBILLING_CUSTOMIZATION_ID if is_selfbill
-                                     else PINT_AE_CUSTOMIZATION_ID),
+                'customization_id': (
+                    PINT_AE_SELFBILLING_CUSTOMIZATION_ID
+                    if is_selfbill
+                    else PINT_AE_CUSTOMIZATION_ID
+                ),
             },
             'seller': self._tca_json_party(seller, self.tca_seller_participant_id, is_buyer=False),
             'buyer': self._tca_json_party(buyer, self.tca_buyer_participant_id, is_buyer=True),
@@ -2342,8 +2468,12 @@ class AccountMove(models.Model):
 
         # ── Layer 1 conditional header fields ───────────────────────────────
         # due_date: required when payable > 0, except credit notes / deemed.
-        if (self.invoice_date_due and self.amount_total > 0
-                and not is_credit_note and not self.tca_flag_deemed_supply):
+        if (
+            self.invoice_date_due
+            and self.amount_total > 0
+            and not is_credit_note
+            and not self.tca_flag_deemed_supply
+        ):
             detail['payment_due_date'] = self.invoice_date_due.isoformat()
         if self.tca_tax_point_date and not is_credit_note:
             detail['tax_point_date'] = self.tca_tax_point_date.isoformat()
@@ -2387,11 +2517,16 @@ class AccountMove(models.Model):
             references['credit_note_reason_code'] = self.tca_credit_note_reason
         # Preceding invoice(s) — mandatory for credit notes unless reason is VD.
         if is_credit_note and self.tca_credit_note_reason != 'VD' and self.reversed_entry_id:
-            references['preceding_invoices'] = [{
-                'id': self.reversed_entry_id.name or '',
-                'issue_date': (self.reversed_entry_id.invoice_date.isoformat()
-                               if self.reversed_entry_id.invoice_date else ''),
-            }]
+            references['preceding_invoices'] = [
+                {
+                    'id': self.reversed_entry_id.name or '',
+                    'issue_date': (
+                        self.reversed_entry_id.invoice_date.isoformat()
+                        if self.reversed_entry_id.invoice_date
+                        else ''
+                    ),
+                }
+            ]
         if references:
             detail['references'] = references
 
@@ -2413,16 +2548,23 @@ class AccountMove(models.Model):
             # Prefer the delivery-state override, else the ship partner's emirate.
             if self.tca_delivery_state_id:
                 sub = UAE_STATE_CODE_TO_EMIRATE.get(
-                    self.tca_delivery_state_id.code, self.tca_delivery_state_id.code)
+                    self.tca_delivery_state_id.code, self.tca_delivery_state_id.code
+                )
             else:
                 sub = ship._tca_emirate() if ship else ''
-            delivery = {'address': {
-                'address_line_1': self.tca_delivery_street or ship.street or '',
-                'city': self.tca_delivery_city or ship.city or '',
-                'country_subdivision': sub or '',
-                'country_code': (ship.country_id.code if ship.country_id
-                                 else (buyer.country_id.code if buyer.country_id else '')) or '',
-            }}
+            delivery = {
+                'address': {
+                    'address_line_1': self.tca_delivery_street or ship.street or '',
+                    'city': self.tca_delivery_city or ship.city or '',
+                    'country_subdivision': sub or '',
+                    'country_code': (
+                        ship.country_id.code
+                        if ship.country_id
+                        else (buyer.country_id.code if buyer.country_id else '')
+                    )
+                    or '',
+                }
+            }
             if self.tca_delivery_date:
                 delivery['actual_delivery_date'] = self.tca_delivery_date.isoformat()
             if self.tca_incoterms:
@@ -2449,8 +2591,11 @@ class AccountMove(models.Model):
                 obj['start_date'] = s
             if e:
                 obj['end_date'] = e
-            freq = (self.tca_billing_frequency
-                    if self.tca_flag_continuous_supply and self.tca_billing_frequency else '')
+            freq = (
+                self.tca_billing_frequency
+                if self.tca_flag_continuous_supply and self.tca_billing_frequency
+                else ''
+            )
             if freq:
                 obj['frequency_of_billing'] = freq
             # (1) root nested, short subkeys (matches process_control/references style)
@@ -2466,7 +2611,9 @@ class AccountMove(models.Model):
         # payment_instructions — required for all doc types except credit
         # notes / deemed supply. IBT-081 payment means type code.
         if not is_credit_note and not self.tca_flag_deemed_supply and self.tca_payment_means_code:
-            detail['payment_instructions'] = [{'payment_means_type_code': self.tca_payment_means_code}]
+            detail['payment_instructions'] = [
+                {'payment_means_type_code': self.tca_payment_means_code}
+            ]
 
         # Strip empty strings / None / empty containers so TCA does not render
         # empty UBL elements (schematron ibr-079). Numeric 0 / 0.0 is KEPT —
@@ -2528,37 +2675,49 @@ class AccountMove(models.Model):
             # Content rejected — surface the per-field list; leave unposted.
             self.tca_move_state = 'error'
             self.tca_submission_error = '\n'.join(exc.tca_field_errors) or str(exc)
-            raise UserError(_(
-                'TCA rejected this invoice — fix these and confirm again:\n\n%s',
-                '\n'.join(f'• {e}' for e in exc.tca_field_errors) or str(exc),
-            )) from exc
+            raise UserError(
+                _(
+                    'TCA rejected this invoice — fix these and confirm again:\n\n%s',
+                    '\n'.join(f'• {e}' for e in exc.tca_field_errors) or str(exc),
+                )
+            ) from exc
 
         # 4. Duplicate (defensive — unique submission_id should prevent it).
         if result.get('tca_duplicate'):
-            self.write({
-                'tca_move_state': 'submitted',
-                'tca_submission_error': False,
-                'tca_last_submission_id': submission_id,
-            })
-            self._message_log(body=_(
-                'TCA: document already registered (duplicate on submission "%s"). '
-                'Status will sync via cron.', submission_id,
-            ))
+            self.write(
+                {
+                    'tca_move_state': 'submitted',
+                    'tca_submission_error': False,
+                    'tca_last_submission_id': submission_id,
+                }
+            )
+            self._message_log(
+                body=_(
+                    'TCA: document already registered (duplicate on submission "%s"). '
+                    'Status will sync via cron.',
+                    submission_id,
+                )
+            )
             return True
 
         # 5. 201 — validated + queued. Store the TCA id, mark submitted.
         tca_id = result.get('id', '')
-        self.write({
-            'tca_invoice_uuid': tca_id,
-            'tca_move_state': 'submitted',
-            'tca_submission_error': False,
-            'tca_last_submission_id': submission_id,
-        })
-        self._message_log(body=_(
-            'Submitted to TCA Peppol network (validated on submission). '
-            'TCA invoice_number: %(sid)s — TCA ID: %(tid)s',
-            sid=submission_id, tid=tca_id,
-        ))
+        self.write(
+            {
+                'tca_invoice_uuid': tca_id,
+                'tca_move_state': 'submitted',
+                'tca_submission_error': False,
+                'tca_last_submission_id': submission_id,
+            }
+        )
+        self._message_log(
+            body=_(
+                'Submitted to TCA Peppol network (validated on submission). '
+                'TCA invoice_number: %(sid)s — TCA ID: %(tid)s',
+                sid=submission_id,
+                tid=tca_id,
+            )
+        )
         return True
 
     def _post(self, soft=True):
@@ -2605,8 +2764,7 @@ class AccountMove(models.Model):
             # on TCA on the supplier's behalf regardless of the supplier's
             # Peppol presence.
             partner_eligible = (
-                move.tca_is_self_billing
-                or partner.invoice_edi_format == 'ubl_pint_ae'
+                move.tca_is_self_billing or partner.invoice_edi_format == 'ubl_pint_ae'
             )
             if (
                 move.company_id.tca_is_active
@@ -2616,10 +2774,12 @@ class AccountMove(models.Model):
             ):
                 errors = move._tca_validate_mandatory_fields()
                 if errors:
-                    raise UserError(_(
-                        'Cannot confirm this invoice — the following issues must be fixed first:\n\n%s',
-                        '\n'.join(f'• {v}' for v in errors)
-                    ))
+                    raise UserError(
+                        _(
+                            'Cannot confirm this invoice — the following issues must be fixed first:\n\n%s',
+                            '\n'.join(f'• {v}' for v in errors),
+                        )
+                    )
                 pint_moves |= move
 
         # ── Standard Odoo posting (assigns sequence + ledger entries) ────────
@@ -2631,11 +2791,13 @@ class AccountMove(models.Model):
         for move in pint_moves:
             xml_errors = move._tca_validate_xml_pipeline()
             if xml_errors:
-                raise UserError(_(
-                    'Cannot confirm this invoice — PINT AE validation failed:\n\n%s\n\n'
-                    'Fix these issues, then try Confirm again.',
-                    '\n'.join(f'• {v}' for v in xml_errors)
-                ))
+                raise UserError(
+                    _(
+                        'Cannot confirm this invoice — PINT AE validation failed:\n\n%s\n\n'
+                        'Fix these issues, then try Confirm again.',
+                        '\n'.join(f'• {v}' for v in xml_errors),
+                    )
+                )
 
         # No Phase 3. Credit notes (like invoices) are posted here and then
         # submitted via the Send & Print wizard — `_tca_is_send_eligible`
@@ -2681,7 +2843,7 @@ class AccountMove(models.Model):
           uuid           — the TCA invoice UUID
         """
         self.ensure_one()
-        tca_status = payload.get('status')    # int or None
+        tca_status = payload.get('status')  # int or None
         c3_status = payload.get('c3_mls_status')
         c5_status = payload.get('c5_mls_status')
 
@@ -2714,19 +2876,26 @@ class AccountMove(models.Model):
             error_detail = payload.get('error_message') or payload.get('detail') or tca_status
             self.tca_submission_error = error_detail
             self._message_log(
-                body=_('TCA Peppol: Invoice %s — status changed to %s. Detail: %s',
-                       self.name, new_state.upper(), error_detail)
+                body=_(
+                    'TCA Peppol: Invoice %s — status changed to %s. Detail: %s',
+                    self.name,
+                    new_state.upper(),
+                    error_detail,
+                )
             )
         else:
             self.tca_submission_error = False
             self._message_log(
-                body=_('TCA Peppol: Invoice %s — status updated from %s → %s.',
-                       self.name, old_state.upper(), new_state.upper())
+                body=_(
+                    'TCA Peppol: Invoice %s — status updated from %s → %s.',
+                    self.name,
+                    old_state.upper(),
+                    new_state.upper(),
+                )
             )
 
         _logger.info(
-            'TCA: invoice %s (id=%s) state %s → %s',
-            self.name, self.id, old_state, new_state
+            'TCA: invoice %s (id=%s) state %s → %s', self.name, self.id, old_state, new_state
         )
 
     # ──────────────────────────────────────────────────────────────────────────
@@ -2754,11 +2923,14 @@ class AccountMove(models.Model):
         api_svc = self.env['tca.api.service']
 
         for company in active_companies:
-            pending_invoices = self.env['account.move'].search([
-                ('company_id', '=', company.id),
-                ('tca_move_state', 'in', ['submitted', 'processing']),
-                ('tca_invoice_uuid', '!=', False),
-            ], limit=100)
+            pending_invoices = self.env['account.move'].search(
+                [
+                    ('company_id', '=', company.id),
+                    ('tca_move_state', 'in', ['submitted', 'processing']),
+                    ('tca_invoice_uuid', '!=', False),
+                ],
+                limit=100,
+            )
 
             if not pending_invoices:
                 continue
@@ -2768,12 +2940,15 @@ class AccountMove(models.Model):
             try:
                 result = api_svc.list_processing_outbound(company, limit=200)
                 tca_list = result.get('results', result) if isinstance(result, dict) else result
-                still_processing_ids = {str(item.get('id', '')) for item in tca_list if item.get('id')}
+                still_processing_ids = {
+                    str(item.get('id', '')) for item in tca_list if item.get('id')
+                }
             except Exception as exc:
                 _logger.warning(
                     'TCA cron: list_processing_outbound failed for company %s (%s), '
                     'falling back to per-invoice poll',
-                    company.id, exc
+                    company.id,
+                    exc,
                 )
                 # Fallback: poll all pending invoices individually
                 for invoice in pending_invoices:
@@ -2802,21 +2977,25 @@ class AccountMove(models.Model):
             # 'timeout' / '503' / 'cannot reach' on the exception text.
             _logger.warning(
                 'TCA cron: transient error polling invoice %s (uuid=%s), will retry: %s',
-                invoice.name, invoice.tca_invoice_uuid, exc
+                invoice.name,
+                invoice.tca_invoice_uuid,
+                exc,
             )
         except Exception as exc:  # noqa: BLE001 — permanent failure path
             # Permanent — mark as error so user investigates.
             _logger.error(
                 'TCA cron: permanent error polling invoice %s (uuid=%s): %s',
-                invoice.name, invoice.tca_invoice_uuid, exc
+                invoice.name,
+                invoice.tca_invoice_uuid,
+                exc,
             )
-            invoice.write({
-                'tca_move_state': 'error',
-                'tca_submission_error': str(exc),
-            })
-            invoice._message_log(body=_(
-                'TCA cron: status poll failed — %s', exc
-            ))
+            invoice.write(
+                {
+                    'tca_move_state': 'error',
+                    'tca_submission_error': str(exc),
+                }
+            )
+            invoice._message_log(body=_('TCA cron: status poll failed — %s', exc))
 
     @api.model
     def _cron_tca_pull_inbound_invoices(self):
@@ -2848,13 +3027,10 @@ class AccountMove(models.Model):
             last_sync = ICP.get_param(cursor_key, '')
 
             try:
-                self._tca_pull_inbound_for_company(
-                    api_svc, company, ICP, cursor_key, last_sync
-                )
+                self._tca_pull_inbound_for_company(api_svc, company, ICP, cursor_key, last_sync)
             except Exception as exc:
                 _logger.error(
-                    'TCA cron: failed to pull inbound invoices for company %s: %s',
-                    company.id, exc
+                    'TCA cron: failed to pull inbound invoices for company %s: %s', company.id, exc
                 )
 
     @api.model
@@ -2875,7 +3051,9 @@ class AccountMove(models.Model):
         while True:
             for tca_invoice in page_invoices:
                 tca_id = tca_invoice.get('id')
-                xml_location_path = tca_invoice.get('document_location_path') or tca_invoice.get('invoice_xml_location_path')
+                xml_location_path = tca_invoice.get('document_location_path') or tca_invoice.get(
+                    'invoice_xml_location_path'
+                )
                 created_at = str(tca_invoice.get('created_at') or '')
 
                 if not tca_id:
@@ -2886,10 +3064,13 @@ class AccountMove(models.Model):
                     continue
 
                 # Deduplication — belt-and-suspenders after cursor check
-                existing = self.env['account.move'].search([
-                    ('tca_invoice_uuid', '=', tca_id),
-                    ('company_id', '=', company.id),
-                ], limit=1)
+                existing = self.env['account.move'].search(
+                    [
+                        ('tca_invoice_uuid', '=', tca_id),
+                        ('company_id', '=', company.id),
+                    ],
+                    limit=1,
+                )
                 if existing:
                     continue
 
@@ -2898,20 +3079,18 @@ class AccountMove(models.Model):
                     # Backend returns it on single GET via `invoice_xml_location_path`.
                     try:
                         detail = api_svc.get_invoice_status(company, tca_id)
-                        xml_location_path = (
-                            detail.get('document_location_path')
-                            or detail.get('invoice_xml_location_path')
+                        xml_location_path = detail.get('document_location_path') or detail.get(
+                            'invoice_xml_location_path'
                         )
                     except Exception as exc:
                         _logger.warning(
-                            'TCA cron: failed to fetch detail for inbound id=%s: %s',
-                            tca_id, exc
+                            'TCA cron: failed to fetch detail for inbound id=%s: %s', tca_id, exc
                         )
                         continue
                     if not xml_location_path:
                         _logger.warning(
                             'TCA cron: inbound invoice id=%s has no XML path even after detail fetch, skipping',
-                            tca_id
+                            tca_id,
                         )
                         continue
 
@@ -2919,9 +3098,7 @@ class AccountMove(models.Model):
                 # After commit, the ORM cache must be invalidated: records held
                 # in-memory may be stale relative to other concurrent transactions
                 # that ran while we were doing HTTP work for this iteration.
-                move = self._tca_import_inbound_invoice(
-                    company, tca_id, xml_location_path, api_svc
-                )
+                move = self._tca_import_inbound_invoice(company, tca_id, xml_location_path, api_svc)
                 self.env.cr.commit()
                 self.env.invalidate_all()
 
@@ -2944,7 +3121,8 @@ class AccountMove(models.Model):
             ICP.set_param(cursor_key, latest_created_at)
             _logger.info(
                 'TCA cron: updated last_inbound_sync for company %s to %s',
-                company.id, latest_created_at
+                company.id,
+                latest_created_at,
             )
 
     def _tca_import_inbound_invoice(self, company, tca_id, xml_location_path, api_svc=None):
@@ -2966,22 +3144,30 @@ class AccountMove(models.Model):
         except Exception as exc:
             _logger.error(
                 'TCA: failed to download XML for id %s (path=%s): %s',
-                tca_id, xml_location_path, exc
+                tca_id,
+                xml_location_path,
+                exc,
             )
             # No stub created — cron will retry on next run (cursor doesn't advance).
             # Log to company partner chatter so admins are aware.
-            company.partner_id._message_log(body=_(
-                'TCA Peppol: failed to download inbound invoice XML (ID: %s). '
-                'Error: %s. Will retry on next cron run.',
-                tca_id, exc,
-            ))
+            company.partner_id._message_log(
+                body=_(
+                    'TCA Peppol: failed to download inbound invoice XML (ID: %s). '
+                    'Error: %s. Will retry on next cron run.',
+                    tca_id,
+                    exc,
+                )
+            )
             return None
 
         # Find a purchase journal for this company
-        journal = self.env['account.journal'].search([
-            ('type', '=', 'purchase'),
-            ('company_id', '=', company.id),
-        ], limit=1)
+        journal = self.env['account.journal'].search(
+            [
+                ('type', '=', 'purchase'),
+                ('company_id', '=', company.id),
+            ],
+            limit=1,
+        )
         if not journal:
             _logger.error('TCA: no purchase journal found for company %s', company.id)
             return None
@@ -2989,14 +3175,16 @@ class AccountMove(models.Model):
         # Create attachment
         filename = f'tca_inbound_{tca_id}.xml'
         try:
-            attachment = self.env['ir.attachment'].create({
-                'name': filename,
-                'datas': b64encode(xml_bytes),
-                'res_model': 'account.journal',
-                'res_id': journal.id,
-                'type': 'binary',
-                'mimetype': 'application/xml',
-            })
+            attachment = self.env['ir.attachment'].create(
+                {
+                    'name': filename,
+                    'datas': b64encode(xml_bytes),
+                    'res_model': 'account.journal',
+                    'res_id': journal.id,
+                    'type': 'binary',
+                    'mimetype': 'application/xml',
+                }
+            )
         except Exception as exc:
             _logger.error('TCA: attachment creation failed for id %s: %s', tca_id, exc)
             return None
@@ -3014,22 +3202,24 @@ class AccountMove(models.Model):
             _logger.error('TCA: UBL import failed for id %s: %s', tca_id, exc)
             # G-3: create a bare draft vendor bill stub so the document is not lost.
             # Accounting staff can manually complete the record using the attached XML.
-            move = self.env['account.move'].create({
-                'move_type': 'in_invoice',
-                'journal_id': journal.id,
-                'company_id': company.id,
-                'tca_invoice_uuid': tca_id,
-                'tca_move_state': 'inbound_received',
-                'tca_is_inbound': True,
-                'tca_inbound_status': 'pending',
-                'ref': f'TCA-{tca_id}',
-            })
+            move = self.env['account.move'].create(
+                {
+                    'move_type': 'in_invoice',
+                    'journal_id': journal.id,
+                    'company_id': company.id,
+                    'tca_invoice_uuid': tca_id,
+                    'tca_move_state': 'inbound_received',
+                    'tca_is_inbound': True,
+                    'tca_inbound_status': 'pending',
+                    'ref': f'TCA-{tca_id}',
+                }
+            )
             attachment.write({'res_model': 'account.move', 'res_id': move.id})
             move._message_log(
                 body=_(
                     'TCA Peppol: UBL parse failed for inbound invoice (ID: %s). '
                     'The raw XML is attached. Please fill in the details manually.',
-                    tca_id
+                    tca_id,
                 )
             )
             _logger.warning(
@@ -3038,32 +3228,39 @@ class AccountMove(models.Model):
             return move
 
         if move:
-            move.sudo().write({
-                'tca_invoice_uuid': tca_id,
-                'tca_move_state': 'inbound_received',
-                'tca_is_inbound': True,
-                'tca_inbound_status': 'pending',
-            })
-            move._message_log(
-                body=_('Invoice imported from TCA Peppol network (ID: %s).', tca_id)
+            move.sudo().write(
+                {
+                    'tca_invoice_uuid': tca_id,
+                    'tca_move_state': 'inbound_received',
+                    'tca_is_inbound': True,
+                    'tca_inbound_status': 'pending',
+                }
             )
+            move._message_log(body=_('Invoice imported from TCA Peppol network (ID: %s).', tca_id))
         else:
-            _logger.warning('TCA: _create_document_from_attachment returned empty for id %s', tca_id)
-            move = self.env['account.move'].create({
-                'move_type': 'in_invoice',
-                'journal_id': journal.id,
-                'company_id': company.id,
-                'tca_invoice_uuid': tca_id,
-                'tca_move_state': 'inbound_received',
-                'tca_is_inbound': True,
-                'tca_inbound_status': 'pending',
-                'ref': f'TCA-{tca_id}',
-            })
+            _logger.warning(
+                'TCA: _create_document_from_attachment returned empty for id %s', tca_id
+            )
+            move = self.env['account.move'].create(
+                {
+                    'move_type': 'in_invoice',
+                    'journal_id': journal.id,
+                    'company_id': company.id,
+                    'tca_invoice_uuid': tca_id,
+                    'tca_move_state': 'inbound_received',
+                    'tca_is_inbound': True,
+                    'tca_inbound_status': 'pending',
+                    'ref': f'TCA-{tca_id}',
+                }
+            )
             attachment.write({'res_model': 'account.move', 'res_id': move.id})
-            move._message_log(body=_(
-                'TCA Peppol: import returned empty for inbound invoice (ID: %s). '
-                'The raw XML is attached. Please fill in the details manually.', tca_id
-            ))
+            move._message_log(
+                body=_(
+                    'TCA Peppol: import returned empty for inbound invoice (ID: %s). '
+                    'The raw XML is attached. Please fill in the details manually.',
+                    tca_id,
+                )
+            )
 
         return move
 
@@ -3080,10 +3277,13 @@ class AccountMove(models.Model):
         """
         self.ensure_one()
         if self.tca_move_state not in ('error', 'rejected'):
-            raise UserError(_(
-                'Invoice %s cannot be resent — current TCA state is "%s".',
-                self.name, self.tca_move_state
-            ))
+            raise UserError(
+                _(
+                    'Invoice %s cannot be resent — current TCA state is "%s".',
+                    self.name,
+                    self.tca_move_state,
+                )
+            )
 
         # If we have a TCA ID, use the resubmit endpoint (avoids duplicate 409)
         if self.tca_invoice_uuid:
@@ -3127,7 +3327,9 @@ class AccountMove(models.Model):
         try:
             # Upload new XML to S3
             self.tca_move_state = 'uploading'
-            upload_response = api_svc.get_document_upload_url(company, filename=f'{self.name.replace("/", "_")}_pint_ae.xml')
+            upload_response = api_svc.get_document_upload_url(
+                company, filename=f'{self.name.replace("/", "_")}_pint_ae.xml'
+            )
             upload_url = upload_response.get('upload_url')
             source_file_path = (
                 upload_response.get('path')
@@ -3149,20 +3351,27 @@ class AccountMove(models.Model):
                 source_file_path=source_file_path,
             )
 
-            self.write({
-                'tca_move_state': 'submitted',
-                'tca_submission_error': False,
-            })
-            self._message_log(body=_(
-                'Invoice resubmitted to TCA via /resubmit/ endpoint. ID: %s', self.tca_invoice_uuid
-            ))
+            self.write(
+                {
+                    'tca_move_state': 'submitted',
+                    'tca_submission_error': False,
+                }
+            )
+            self._message_log(
+                body=_(
+                    'Invoice resubmitted to TCA via /resubmit/ endpoint. ID: %s',
+                    self.tca_invoice_uuid,
+                )
+            )
             _logger.info('TCA: invoice %s resubmitted. ID=%s', self.name, self.tca_invoice_uuid)
 
         except Exception as exc:
-            self.write({
-                'tca_move_state': 'error',
-                'tca_submission_error': str(exc),
-            })
+            self.write(
+                {
+                    'tca_move_state': 'error',
+                    'tca_submission_error': str(exc),
+                }
+            )
             self._message_log(body=_('TCA resubmission failed: %s', exc))
             raise UserError(_('TCA resubmission failed: %s', exc)) from exc
 
@@ -3189,7 +3398,9 @@ class AccountMove(models.Model):
         """
         self.ensure_one()
         if not self.tca_is_inbound:
-            raise UserError(_('This action is only available for invoices received via TCA Peppol.'))
+            raise UserError(
+                _('This action is only available for invoices received via TCA Peppol.')
+            )
         if self.state != 'draft':
             raise UserError(_('Only draft invoices can be accepted. Current state: %s', self.state))
 
@@ -3211,7 +3422,9 @@ class AccountMove(models.Model):
         """
         self.ensure_one()
         if not self.tca_is_inbound:
-            raise UserError(_('This action is only available for invoices received via TCA Peppol.'))
+            raise UserError(
+                _('This action is only available for invoices received via TCA Peppol.')
+            )
         if self.state not in ('draft', 'posted'):
             raise UserError(_('Cannot reject an invoice in state: %s', self.state))
 
@@ -3240,9 +3453,7 @@ class AccountMove(models.Model):
         if self.state == 'draft':
             self.button_cancel()
 
-        self._message_log(body=_(
-            'Inbound invoice rejected.\nReason: %s', reason
-        ))
+        self._message_log(body=_('Inbound invoice rejected.\nReason: %s', reason))
 
         # TODO: When TCA adds an Invoice Response endpoint, send RE (Rejected)
         # response back to the seller via:

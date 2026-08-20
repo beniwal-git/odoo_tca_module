@@ -29,6 +29,7 @@ class ResPartner(models.Model):
     2. Register AE → ubl_pint_ae in the country format mapping
     3. Add UAE-specific Peppol fields (legal entity type, trade license authority)
     """
+
     _inherit = 'res.partner'
 
     # ── UAE-specific Peppol fields ────────────────────────────────────────────
@@ -231,7 +232,8 @@ class ResPartner(models.Model):
                 return _(
                     'The UAE Peppol endpoint must be exactly 10 digits starting with "1" '
                     '(UAE Peppol Participant ID). The 15-digit TRN belongs in the "Tax ID" '
-                    'field instead. Current: "%s".', endpoint,
+                    'field instead. Current: "%s".',
+                    endpoint,
                 )
             return None
         return super()._build_error_peppol_endpoint(eas, endpoint)
@@ -313,36 +315,45 @@ class ResPartner(models.Model):
             if partner.vat:
                 v = partner.vat.strip()
                 if not (RE_UAE_TRN.match(v) or RE_UAE_TIN.match(v)):
-                    errors.append(_(
-                        '"Tax ID" must be either the 15-character UAE TRN or the '
-                        '10-digit TIN, both starting with "1". Current: "%s".', v
-                    ))
+                    errors.append(
+                        _(
+                            '"Tax ID" must be either the 15-character UAE TRN or the '
+                            '10-digit TIN, both starting with "1". Current: "%s".',
+                            v,
+                        )
+                    )
 
             # ── Email format ─────────────────────────────────────────────────
             if partner.email and not RE_EMAIL.match(partner.email.strip()):
-                errors.append(_(
-                    '"Email" must be a valid email address (e.g. name@example.com). '
-                    'Current: "%s".', partner.email
-                ))
+                errors.append(
+                    _(
+                        '"Email" must be a valid email address (e.g. name@example.com). '
+                        'Current: "%s".',
+                        partner.email,
+                    )
+                )
 
             # ── Phone format ─────────────────────────────────────────────────
             phone_val = (partner.phone or '').strip()
             if phone_val:
                 if not RE_PHONE.match(phone_val):
-                    errors.append(_(
-                        '"Phone" may only contain digits, spaces, dashes, '
-                        'parentheses, dots and a leading +. Current: "%s".',
-                        phone_val
-                    ))
+                    errors.append(
+                        _(
+                            '"Phone" may only contain digits, spaces, dashes, '
+                            'parentheses, dots and a leading +. Current: "%s".',
+                            phone_val,
+                        )
+                    )
                 elif sum(c.isdigit() for c in phone_val) < 7:
-                    errors.append(_(
-                        '"Phone" must contain at least 7 digits. Current: "%s".',
-                        phone_val
-                    ))
+                    errors.append(
+                        _('"Phone" must contain at least 7 digits. Current: "%s".', phone_val)
+                    )
 
             if errors:
-                raise ValidationError(_(
-                    'Please fix the following before saving "%(name)s":\n\n%(list)s',
-                    name=partner.display_name or _('this contact'),
-                    list='\n'.join(f'• {e}' for e in errors),
-                ))
+                raise ValidationError(
+                    _(
+                        'Please fix the following before saving "%(name)s":\n\n%(list)s',
+                        name=partner.display_name or _('this contact'),
+                        list='\n'.join(f'• {e}' for e in errors),
+                    )
+                )

@@ -560,9 +560,9 @@ class AccountMove(models.Model):
         copy=True,
         help=(
             'BTAE-02: 8-digit binary flag string for the PINT AE ProfileExecutionID. '
-            'Composed automatically from the seven flag checkboxes above (positions 1-7); '
-            'position 8 (Export) is auto-set in the XML output when the buyer is non-UAE. '
-            '"00000000" = standard tax invoice.'
+            'Composed automatically from the eight flag checkboxes above, including '
+            'position 8 (Export) — which is a manual choice, not auto-detected from '
+            'the buyer country. "00000000" = standard tax invoice.'
         ),
     )
 

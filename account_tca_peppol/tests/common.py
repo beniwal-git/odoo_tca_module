@@ -68,7 +68,10 @@ class TcaTestCase(TransactionCase):
             'country_id': cls.uae.id,
             'street': 'Corniche Road',
             'city': 'Abu Dhabi',
-            'vat': '200000000000003',
+            # UAE TRN — must be 15 chars starting with '1' (RE_UAE_TRN), else
+            # res.partner._check_tca_partner_formats rejects the fixture and
+            # every test in the suite errors during setUpClass.
+            'vat': '100000000000003',
             'peppol_eas': '0235',
             'peppol_endpoint': '1000000002',
             'invoice_edi_format': 'ubl_pint_ae',

@@ -331,12 +331,22 @@ class TestPintAeXmlConstraints(TcaTestCase):
 @tagged('post_install', '-at_install')
 class TestPintAeBtae02ExportFlag(TcaTestCase):
     """
-    F1-3 / F2-9 — BTAE-02 export bit auto-detection.
+    BTAE-02 export bit — position 8 (index 7) of ProfileExecutionID.
 
-    Position 8 (index 7) of ProfileExecutionID = Exports flag.
-    Must be '1' when buyer country != AE (auto-detected, not user-set).
-    Must be '0' when buyer country == AE (unless user explicitly sets it).
+    Export is a MANUAL user choice (tca_flag_export). It is NOT auto-detected
+    from the buyer's country: a foreign buyer may still be out of scope for
+    UAE e-invoicing entirely, so forcing the bit on every non-AE buyer was
+    wrong and was removed.
+
+    Consequence for these tests: a foreign buyer is off the UAE Peppol network,
+    so nothing auto-fills its Participant ID — the routing helper deliberately
+    returns '' and the user types an FTA predefined endpoint. Every non-AE
+    fixture below therefore sets tca_buyer_participant_id by hand, exactly as
+    the UI requires.
     """
+
+    #: FTA predefined endpoint for "export, receiver not on the Peppol network".
+    EXPORT_PID = '9900000099'
 
     @classmethod
     def setUpClass(cls):
@@ -345,10 +355,23 @@ class TestPintAeBtae02ExportFlag(TcaTestCase):
         uk = cls.env.ref('base.uk', raise_if_not_found=False)
         if not uk:
             uk = cls.env['res.country'].create({'name': 'United Kingdom', 'code': 'GB'})
+        uk_state = cls.env['res.country.state'].search([('country_id', '=', uk.id)], limit=1)
+        if not uk_state:
+            uk_state = cls.env['res.country.state'].create({
+                'name': 'Greater London',
+                'code': 'LDN',
+                'country_id': uk.id,
+            })
+        # A full address is mandatory once the Export flag is set (ibr-152-ae),
+        # so the fixture carries street/city/state — not just the country.
         cls.uk_partner = cls.env['res.partner'].create({
             'name': 'UK Buyer Ltd',
             'is_company': True,
             'country_id': uk.id,
+            'state_id': uk_state.id,
+            'street': '10 Downing Street',
+            'city': 'London',
+            'zip': 'SW1A 2AA',
             'vat': 'GB123456789',
             'peppol_eas': '0088',
             'peppol_endpoint': '1234567890',
@@ -362,46 +385,76 @@ class TestPintAeBtae02ExportFlag(TcaTestCase):
         tree = etree.fromstring(xml_bytes)
         return _find_text(tree, '//cbc:ProfileExecutionID')
 
+    def _make_export_invoice(self, **flags):
+        """Foreign-buyer invoice with the Participant ID filled in by hand.
+
+        Set the boolean flags, never tca_transaction_type_flags directly — that
+        field is a stored compute over the booleans, so a direct write is undone
+        the moment any dependency changes.
+        """
+        invoice = self._make_invoice(partner=self.uk_partner)
+        invoice.write({'tca_buyer_participant_id': self.EXPORT_PID, **flags})
+        return invoice
+
     def test_ae_buyer_export_bit_is_zero(self):
         """Standard domestic invoice (AE buyer, no flags set) → export bit = 0."""
         invoice = self._make_invoice()  # default UAE partner
-        invoice.tca_transaction_type_flags = '00000000'
         pei = self._get_pei(invoice)
-        self.assertEqual(pei[7], '0',
-                         f'Export bit (pos 8) must be 0 for AE buyer, got "{pei}"')
+        self.assertEqual(
+            pei[7], '0', f'Export bit (pos 8) must be 0 for AE buyer, got "{pei}"'
+        )
 
-    def test_non_ae_buyer_export_bit_auto_set(self):
-        """Export invoice (non-AE buyer) → export bit (index 7) auto-set to 1."""
-        invoice = self._make_invoice(partner=self.uk_partner)
-        invoice.tca_transaction_type_flags = '00000000'
+    def test_export_flag_sets_export_bit(self):
+        """Ticking Export sets bit 8 — the only thing that does."""
+        invoice = self._make_export_invoice(tca_flag_export=True)
         pei = self._get_pei(invoice)
-        self.assertEqual(pei[7], '1',
-                         f'Export bit must be 1 for non-AE buyer, got "{pei}"')
+        self.assertEqual(
+            pei[7], '1', f'Export bit must be 1 when tca_flag_export is set, got "{pei}"'
+        )
 
-    def test_non_ae_buyer_other_flags_preserved(self):
-        """When buyer is non-AE and user set other flags, only export bit is forced; rest preserved."""
-        invoice = self._make_invoice(partner=self.uk_partner)
-        invoice.tca_transaction_type_flags = '10000000'  # FTZ flag + export = 0
-        # FTZ flag set → ibr-007-ae requires a Buyer Beneficiary ID.
-        invoice.tca_buyer_beneficiary_id = 'FZ-BENEF-001'
+    def test_non_ae_buyer_alone_does_not_set_export_bit(self):
+        """A foreign buyer does NOT imply export — the bit stays 0 until ticked.
+
+        Guards the behaviour change: auto-detecting export from buyer country
+        mislabelled every out-of-scope foreign sale as an export.
+        """
+        invoice = self._make_export_invoice()  # no flags — buyer is UK
+        pei = self._get_pei(invoice)
+        self.assertEqual(
+            pei[7], '0', f'Export bit must stay 0 without the flag, got "{pei}"'
+        )
+
+    def test_export_flag_preserves_other_flags(self):
+        """Export composes with the other flags rather than overwriting them."""
+        invoice = self._make_export_invoice(
+            tca_flag_free_trade_zone=True,
+            tca_flag_export=True,
+            # FTZ flag set → ibr-007-ae requires a Buyer Beneficiary ID.
+            tca_buyer_beneficiary_id='FZ-BENEF-001',
+        )
         pei = self._get_pei(invoice)
         self.assertEqual(pei[0], '1', 'FTZ bit (pos 1) must be preserved')
-        self.assertEqual(pei[7], '1', 'Export bit (pos 8) must be auto-set to 1')
+        self.assertEqual(pei[7], '1', 'Export bit (pos 8) must be set')
         self.assertEqual(pei, '10000001')
 
     def test_ae_buyer_user_flags_fully_preserved(self):
         """For AE buyer, all user-set flags are returned unchanged."""
         invoice = self._make_invoice()
-        invoice.tca_transaction_type_flags = '01000000'  # Deemed supply
+        invoice.tca_flag_deemed_supply = True
+        # Deemed supply routes to a predefined endpoint the user enters by hand.
+        invoice.tca_buyer_participant_id = '9900000097'
         pei = self._get_pei(invoice)
-        self.assertEqual(pei, '01000000',
-                         f'User flags must pass through unchanged for AE buyer, got "{pei}"')
+        self.assertEqual(
+            pei,
+            '01000000',
+            f'User flags must pass through unchanged for AE buyer, got "{pei}"',
+        )
 
     @skip('Compliance pre-flight check rejects bad flags before the export sanitizer runs. '
           'Sanitizer path unreachable via _export_invoice; would need direct unit on _get_profile_execution_id.')
-    def test_invalid_flags_reset_then_export_bit_applied(self):
-        """Invalid flags (wrong length) reset to 00000000; export bit still applied for non-AE buyer."""
-        invoice = self._make_invoice(partner=self.uk_partner)
+    def test_invalid_flags_reset_to_zeroes(self):
+        """Invalid flags (wrong length) are sanitised to 00000000 on export."""
+        invoice = self._make_export_invoice()
         # Bypass the @api.constrains validator — we simulate a corrupted DB state to
         # verify the export-side sanitizer (in _get_profile_execution_id) is defensive.
         self.env.cr.execute(
@@ -410,13 +463,14 @@ class TestPintAeBtae02ExportFlag(TcaTestCase):
         )
         invoice.invalidate_recordset(['tca_transaction_type_flags'])
         pei = self._get_pei(invoice)
-        # After reset: 00000000 → export bit set → 00000001
-        self.assertEqual(pei, '00000001',
-                         f'After invalid flags reset, non-AE export bit must be set, got "{pei}"')
+        # Export is no longer forced from buyer country, so the reset value stands.
+        self.assertEqual(
+            pei, '00000000', f'Invalid flags must reset to all zeroes, got "{pei}"'
+        )
 
     def test_profile_execution_id_still_8_chars_for_export(self):
         """ProfileExecutionID for export invoice must still be exactly 8 chars."""
-        invoice = self._make_invoice(partner=self.uk_partner)
+        invoice = self._make_export_invoice(tca_flag_export=True)
         pei = self._get_pei(invoice)
         self.assertEqual(len(pei), 8)
         self.assertTrue(all(c in '01' for c in pei))

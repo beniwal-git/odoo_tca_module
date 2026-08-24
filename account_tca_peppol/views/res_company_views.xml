@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <record id="view_company_form_tca" model="ir.ui.view">
+        <field name="name">res.company.form.tca.peppol</field>
+        <field name="model">res.company</field>
+        <field name="inherit_id" ref="base.view_company_form"/>
+        <field name="arch" type="xml">
+
+            <xpath expr="//page[@name='general_info']" position="after">
+                <page string="Invoicing (UAE)" name="tca_invoicing">
+                    <group>
+                        <group string="UAE Peppol Identity">
+                            <field name="peppol_eas"/>
+                            <field name="peppol_endpoint"/>
+                            <field name="tca_emirate"/>
+                        </group>
+                        <group string="UAE Legal Registration">
+                            <field name="tca_legal_id_type"/>
+                            <field name="tca_trade_license"/>
+                            <field name="tca_legal_authority"
+                                   invisible="tca_legal_id_type != 'TL'"/>
+                            <field name="tca_passport_country_id"
+                                   invisible="tca_legal_id_type != 'PAS'"/>
+                        </group>
+                    </group>
+                </page>
+            </xpath>
+
+        </field>
+    </record>
+
+</odoo>

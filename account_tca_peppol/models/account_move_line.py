@@ -6,6 +6,8 @@ import re
 from odoo import _, api, fields, models
 from odoo.exceptions import ValidationError
 
+from .account_tax import UAE_TAX_EXEMPTION_REASON_SELECTION
+
 
 class AccountMoveLine(models.Model):
     """
@@ -107,6 +109,34 @@ class AccountMoveLine(models.Model):
         string='Line Note (IBT-127)',
         help='IBT-127: Free-text note relevant to this invoice line.',
     )
+    tca_vat_exemption_reason_code = fields.Selection(
+        selection=UAE_TAX_EXEMPTION_REASON_SELECTION,
+        string='VAT Exemption Reason (IBT-186, line)',
+        help=(
+            'IBT-186: Per-line override of the tax\'s exemption reason code. '
+            'Takes precedence over the reason code set on the tax record. '
+            'Mandatory when this line carries an Exempt (E) category tax and '
+            'no reason code is set anywhere (ibr-167-ae).'
+        ),
+    )
+    tca_line_needs_exemption_reason = fields.Boolean(
+        compute='_compute_tca_line_needs_exemption_reason',
+        help='UI-only: true when this line has an Exempt (E) category tax but '
+             'no exemption reason set on the line or the tax.',
+    )
+
+    @api.depends('tax_ids', 'tax_ids.tca_tax_category', 'tax_ids.tca_exemption_reason_code',
+                 'tca_vat_exemption_reason_code')
+    def _compute_tca_line_needs_exemption_reason(self):
+        for line in self:
+            exempt_tax = next(
+                (t for t in line.tax_ids if t.tca_tax_category == 'E'), None,
+            )
+            line.tca_line_needs_exemption_reason = bool(
+                exempt_tax
+                and not line.tca_vat_exemption_reason_code
+                and not exempt_tax.tca_exemption_reason_code
+            )
 
     # ── Effective commodity type (cached) ─────────────────────────────────────
     # Validation, the XML builder and the import path all need the same

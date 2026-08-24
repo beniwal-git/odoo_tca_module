@@ -81,6 +81,11 @@ def _post_init_migrate_invoice_type_code(env):
     if env.cr.fetchone():
         # Use SUBSTRING on the legacy column to set each boolean column.
         # Only operate on rows where the string is exactly 8 chars long.
+        # NOTE: position 8 (Export) is NOT migrated from this string — under
+        # the pre-refactor logic the stored string's 8th char was always
+        # '0' (Export was auto-derived from buyer country transiently at
+        # XML-build time, never persisted). See step 5 below for the actual
+        # Export backfill.
         env.cr.execute("""
             UPDATE account_move SET
                 tca_flag_free_trade_zone   = (SUBSTRING(tca_transaction_type_flags, 1, 1) = '1'),
@@ -91,4 +96,27 @@ def _post_init_migrate_invoice_type_code(env):
                 tca_flag_disclosed_agent   = (SUBSTRING(tca_transaction_type_flags, 6, 1) = '1'),
                 tca_flag_ecommerce         = (SUBSTRING(tca_transaction_type_flags, 7, 1) = '1')
             WHERE LENGTH(tca_transaction_type_flags) = 8
+        """)
+
+    # ── 5. tca_flag_export backfill (new manual flag, replaces buyer-country
+    # auto-detection) ───────────────────────────────────────────────────────
+    # Reconstruct what the OLD auto-detect logic would have produced —
+    # foreign buyer ⇒ Export bit set — so existing records keep their prior
+    # Export status instead of silently losing it now that the bit is a
+    # stored user flag rather than derived at XML-build time. Only touches
+    # rows where the column exists (fresh installs already default to False
+    # with no legacy behavior to preserve) and only overwrites the default.
+    env.cr.execute("""
+        SELECT column_name FROM information_schema.columns
+        WHERE table_name = 'account_move' AND column_name = 'tca_flag_export'
+    """)
+    if env.cr.fetchone():
+        env.cr.execute("""
+            UPDATE account_move am SET tca_flag_export = TRUE
+            FROM res_partner p, res_country c
+            WHERE am.partner_id = p.id
+              AND p.country_id = c.id
+              AND c.code != 'AE'
+              AND am.tca_invoice_type_code IS NOT NULL
+              AND am.tca_flag_export IS NOT TRUE
         """)

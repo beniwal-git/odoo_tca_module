@@ -3,7 +3,7 @@
 
 {
     'name': 'TCA Peppol E-Invoicing (UAE PINT AE)',
-    'version': '17.0.2.1.0',
+    'version': '17.0.3.0.0',
     'category': 'Accounting/Accounting',
     'summary': 'UAE PINT AE e-invoicing via TCA Access Point',
     'description': """
@@ -25,15 +25,16 @@
         'account',
         'account_edi_ubl_cii',
     ],
-    # saxonche powers PINT AE schematron validation (services/
-    # schematron_validator.py). It is soft-imported — the module still
-    # installs without it, but schematron validation is silently skipped.
-    # Declaring it here surfaces a clear "missing dependency" error at
-    # install time instead of failing quietly. odoo.sh picks it up from
-    # the repo-root requirements.txt.
-    'external_dependencies': {
-        'python': ['saxonche'],
-    },
+    # No external Python dependencies. PINT AE validation runs as pure-Python
+    # rules at Confirm (account_move._tca_validate_xml_pipeline), and the TCA
+    # Access Point runs the authoritative PINT AE schematron server-side on
+    # submission (the inline-JSON /api/v1/invoices/ endpoint validates
+    # synchronously — 400 with a per-field error list on bad content). A
+    # previous build shipped an optional saxonche/Saxon-C local schematron
+    # re-check; it was removed — the native GraalVM runtime it needs is
+    # unreliable on some hosted deployments and added no coverage over the
+    # Python rules + the AP's server-side check.
+    #
     # l10n_ae (UAE chart of accounts) is NOT a hard dependency — the addon works without
     # it. Installing l10n_ae is strongly recommended for UAE companies as it provides the
     # correct VAT tax groups and account structure expected by UAE e-invoicing.
@@ -46,6 +47,7 @@
         'data/pint_ae_templates.xml',
         'data/cron.xml',
         'views/res_config_settings_views.xml',
+        'views/res_company_views.xml',
         'views/account_move_views.xml',
         'views/res_partner_views.xml',
         'views/account_tax_views.xml',

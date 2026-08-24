@@ -1,8 +1,12 @@
 # -*- coding: utf-8 -*-
 # Part of TCA. See LICENSE file for full copyright and licensing details.
 
+import logging
+
 from odoo import fields, models, api, _
 from odoo.exceptions import UserError
+
+_logger = logging.getLogger(__name__)
 
 
 class ResCompany(models.Model):
@@ -57,6 +61,40 @@ class ResCompany(models.Model):
         ),
     )
 
+    # ── UAE Peppol identity (related to the company's partner record) ────────
+    # Lets a company be configured for UAE e-invoicing from Settings →
+    # Companies without leaving to edit the underlying partner in Contacts.
+    peppol_eas = fields.Char(related='partner_id.peppol_eas', readonly=False)
+    peppol_endpoint = fields.Char(related='partner_id.peppol_endpoint', readonly=False)
+    tca_emirate = fields.Selection(related='partner_id.tca_emirate', readonly=False)
+    tca_legal_id_type = fields.Selection(related='partner_id.tca_legal_id_type', readonly=False)
+    tca_trade_license = fields.Char(related='partner_id.tca_trade_license', readonly=False)
+    tca_legal_authority = fields.Char(related='partner_id.tca_legal_authority', readonly=False)
+    tca_passport_country_id = fields.Many2one(
+        related='partner_id.tca_passport_country_id', readonly=False,
+    )
+
+    # ── Registry bootstrap ────────────────────────────────────────────────────
+
+    def _register_hook(self):
+        """
+        EXTENDS base.
+        On every registry build (server start / module upgrade), ensure every
+        TCA-active company has the six canonical PINT AE taxes. Module-version
+        migrations don't reliably re-fire in a dev `-u` loop, so this is the
+        belt-and-suspenders path that keeps a long-lived dev/staging database
+        in sync with the current tax template set. Idempotent, wrapped so a
+        bootstrap failure never breaks server startup.
+        """
+        result = super()._register_hook()
+        try:
+            active_companies = self.sudo().search([('tca_is_active', '=', True)])
+            for company in active_companies:
+                self.env['account.tax']._tca_ensure_pint_taxes(company)
+        except Exception:
+            _logger.exception('TCA: PINT AE tax bootstrap in _register_hook failed')
+        return result
+
     # ── Computed helpers ──────────────────────────────────────────────────────
 
     def _get_tca_config_key(self, key):
@@ -109,11 +147,11 @@ class ResCompany(models.Model):
             org_info = api_service.get_org_info(self)
             self.tca_org_name = org_info.get('name', '')
             self.tca_is_active = True
-            # Seed OOS taxes for sale + purchase so users can immediately
-            # tick "Out of Scope" on an invoice without first configuring
-            # the chart of accounts. Idempotent — safe to re-run.
-            for direction in ('sale', 'purchase'):
-                self.env['account.tax']._tca_ensure_oos_tax(self, direction)
+            # Seed all six PINT AE taxes (S/E/O/AE/Z/N) for sale + purchase so
+            # users can immediately post PINT AE-compliant invoices without
+            # first configuring the chart of accounts. Idempotent — safe to
+            # re-run.
+            self.env['account.tax']._tca_ensure_pint_taxes(self)
         except UserError:
             self.tca_is_active = False
             self.tca_org_name = ''

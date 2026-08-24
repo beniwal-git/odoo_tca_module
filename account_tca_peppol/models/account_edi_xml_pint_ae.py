@@ -37,25 +37,30 @@ import uuid as _uuid_mod
 
 from odoo import models, fields, api, _
 
+from .. import constants
+
 _logger = logging.getLogger(__name__)
 
 
 # ── PINT AE identifiers ────────────────────────────────────────────────────────
-PINT_AE_CUSTOMIZATION_ID = 'urn:peppol:pint:billing-1@ae-1'
+PINT_AE_CUSTOMIZATION_ID = constants.PINT_AE_CUSTOMIZATION_ID
+# Self-billing variants are declared but not wired up — see
+# docs/PORTING_17_vs_19.md P2.1 (self-billing intentionally out of scope
+# for 17.0; Odoo 17/18 doesn't have core self-billing support to build on).
 PINT_AE_SELFBILLING_CUSTOMIZATION_ID = 'urn:peppol:pint:selfbilling-1@ae-1'
-PINT_AE_PROFILE_ID = 'urn:peppol:bis:billing'
+PINT_AE_PROFILE_ID = constants.PINT_AE_PROFILE_ID
 PINT_AE_SELFBILLING_PROFILE_ID = 'urn:peppol:bis:selfbilling'
-UAE_EAS = '0235'
+UAE_EAS = constants.UAE_EAS
 
-# UAE VAT categories used by the mandate
+# UAE VAT categories used by the mandate (UNCL5305, restricted to the six
+# codes valid under the UAE mandate — no EU-only G/K carryover).
 UAE_VAT_CATEGORIES = {
     'S': 5.0,    # Standard Rate 5%
-    'Z': 0.0,    # Zero Rated
     'E': 0.0,    # Exempt
     'O': None,   # Out of scope / Not subject to VAT
     'AE': 5.0,   # Reverse Charge (VAT accounted by buyer)
-    'G': 0.0,    # Free export (Zero-rated, export)
-    'K': 0.0,    # Intra-community supply (not used in UAE but included for completeness)
+    'Z': 0.0,    # Zero Rated
+    'N': 5.0,    # Standard Rate Additional VAT (reported, not added to payable — see ibr-108-ae)
 }
 
 
@@ -136,13 +141,11 @@ class AccountEdiXmlUBLPintAe(models.AbstractModel):
             )
             flags = '00000000'
 
-        # F2-9 / F1-3: auto-detect export — if buyer country is not AE, the
-        # Exports bit (position 8, index 7) must be 1 per PINT AE spec.
-        # Overrides any user-set value for that bit (it's factual, not a choice).
-        buyer = invoice.partner_id.commercial_partner_id
-        if buyer.country_id and buyer.country_id.code != 'AE':
-            flags = flags[:7] + '1'
-
+        # Export (position 8) is a manual user flag (tca_flag_export),
+        # already encoded in tca_transaction_type_flags — no auto-detection
+        # from buyer country here. A foreign buyer alone does not make a
+        # supply an "export" (it may be out-of-scope / not-subject-to-VAT
+        # instead); auto-forcing this bit previously blocked those cases.
         return flags
 
     # ──────────────────────────────────────────────────────────────────────────
@@ -333,11 +336,23 @@ class AccountEdiXmlUBLPintAe(models.AbstractModel):
             # VAT category rate UNLESS the invoice is "not subject to VAT".
             # For OOS subtotals (category 'O'), drop Percent at both
             # subtotal and TaxCategory levels.
-            for sub in vals.get('tax_subtotal_vals', []) or []:
+            subtotals = vals.get('tax_subtotal_vals', []) or []
+            for sub in subtotals:
                 cat = sub.get('tax_category_vals') or {}
                 if cat.get('id') == 'O':
                     sub.pop('percent', None)
                     cat.pop('percent', None)
+                elif cat.get('id') == 'N':
+                    # ibr-108-ae: category N (Standard Rate Additional VAT)
+                    # reports the additional taxable base but must NOT add
+                    # to the document's payable VAT — force TaxAmount to 0.
+                    sub['tax_amount'] = 0.0
+
+            # ibr-co-14: TaxTotal/TaxAmount must equal the sum of its
+            # TaxSubtotal amounts — re-derive it since a category-N
+            # subtotal may have just been zeroed above.
+            if subtotals:
+                vals['tax_amount'] = sum((s.get('tax_amount') or 0.0) for s in subtotals)
 
         # BTAE-20: second TaxTotal in AED when invoice is in foreign currency
         if invoice.currency_id and invoice.currency_id != aed:
@@ -583,26 +598,41 @@ class AccountEdiXmlUBLPintAe(models.AbstractModel):
         return vals_list
 
     # ──────────────────────────────────────────────────────────────────────────
-    # ibr-191-ae: suppress PaymentMeans for credit notes and Deemed Supply.
-    # The PINT AE schematron asserts the EQUIVALENCE
-    #   exists(PaymentMeansCode) ⇔ NOT (CreditNote OR DeemedSupply)
-    # which means credit notes (381/81/261) and Deemed-Supply invoices MUST
-    # NOT carry a <cac:PaymentMeans> element. Returning [] suppresses the
-    # entire group in the rendered XML.
+    # ibr-191-ae: suppress PaymentMeans for credit notes; keep it (with a
+    # user-selected or fallback code) for Deemed Supply. The schematron rule
+    # technically exempts PaymentMeans from being required on both, but in
+    # practice TCA's server still wants the element present for anything
+    # other than a credit note — so only credit notes suppress it entirely.
     # ──────────────────────────────────────────────────────────────────────────
 
     def _get_invoice_payment_means_vals_list(self, invoice):
         """EXTENDS account.edi.xml.ubl_bis3.
-        ibr-191-ae: credit notes (381/81/261) and Deemed-Supply invoices MUST NOT
-        carry a <cac:PaymentMeans> element. Returning [] suppresses the entire
-        group in the rendered XML (the QWeb t-foreach loop simply iterates 0×).
+        ibr-191-ae: credit notes (381/81/261) MUST NOT carry a
+        <cac:PaymentMeans> element — returning [] suppresses the entire group
+        in the rendered XML (the QWeb t-foreach loop simply iterates 0×).
+        Otherwise, emit PaymentMeans using the user-selected
+        tca_payment_means_code (IBT-081) when set; Deemed-Supply invoices
+        fall back to 'ZZZ' (Mutually Defined) when no code was chosen, since
+        TCA's server still expects the element present even though the
+        schematron doesn't strictly require it for that use case.
         """
         is_credit_note = invoice.move_type in ('out_refund', 'in_refund')
-        flags = (invoice.tca_transaction_type_flags or '00000000').ljust(8, '0')
-        deemed_supply = flags[1] == '1'
-        if is_credit_note or deemed_supply:
+        if is_credit_note:
             return []
-        return super()._get_invoice_payment_means_vals_list(invoice)
+
+        vals_list = super()._get_invoice_payment_means_vals_list(invoice)
+        code = invoice.tca_payment_means_code
+        if code:
+            if vals_list:
+                vals_list[0]['payment_means_code'] = code
+            else:
+                vals_list = [{'payment_means_code': code}]
+        elif not vals_list:
+            flags = (invoice.tca_transaction_type_flags or '00000000').ljust(8, '0')
+            deemed_supply = flags[1] == '1'
+            if deemed_supply:
+                vals_list = [{'payment_means_code': 'ZZZ'}]
+        return vals_list
 
     # ──────────────────────────────────────────────────────────────────────────
     # DELIVERY VALS — BTAE-22 Incoterms
@@ -831,21 +861,19 @@ class AccountEdiXmlUBLPintAe(models.AbstractModel):
         Adds UAE-specific pre-export validation.
 
         Also pads payment_means_vals_list around the super() call: our
-        _get_invoice_payment_means_vals_list returns [] for credit notes and
-        Deemed Supply (per ibr-191-ae), but bis3's parent constraint check
-        blindly indexes payment_means_vals_list[0]. Pad an inert entry so the
-        indexing succeeds, then restore the empty list so the XML template
-        still emits no PaymentMeans element.
+        _get_invoice_payment_means_vals_list returns [] for credit notes
+        (per ibr-191-ae), but bis3's parent constraint check blindly indexes
+        payment_means_vals_list[0]. Pad an inert entry so the indexing
+        succeeds, then restore the empty list so the XML template still
+        emits no PaymentMeans element.
         """
         is_credit_note = invoice.move_type in ('out_refund', 'in_refund')
-        flags = (invoice.tca_transaction_type_flags or '00000000').ljust(8, '0')
-        deemed_supply = flags[1] == '1'
         # Sentinel object to distinguish "key absent" from "key present with
         # value None" — defensive restore even if the key shape changes upstream.
         _PMM_MISSING = object()
         _pmm_original = vals['vals'].get('payment_means_vals_list', _PMM_MISSING)
         _pmm_pad = False
-        if (is_credit_note or deemed_supply) and not _pmm_original:
+        if is_credit_note and not _pmm_original:
             vals['vals']['payment_means_vals_list'] = [{'payment_means_code': 0}]
             _pmm_pad = True
         try:

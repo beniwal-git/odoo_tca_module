@@ -42,6 +42,14 @@
                 </button>
             </xpath>
 
+            <!-- ── Per-document e-invoicing opt-out toggle ─────────────── -->
+            <xpath expr="//header" position="inside">
+                <field name="tca_create_einvoice" widget="boolean_toggle"
+                       string="Create E-Invoice (UAE)"
+                       invisible="not tca_company_is_active or move_type not in ('out_invoice', 'out_refund') or tca_is_inbound"
+                       readonly="state != 'draft'"/>
+            </xpath>
+
             <!-- ── Header buttons: Accept/Reject for inbound invoices ──── -->
             <xpath expr="//header" position="inside">
                 <button name="action_tca_accept_inbound"
@@ -106,7 +114,7 @@
                                  still read by the XML builder. -->
                             <field name="tca_invoice_type_code" invisible="1"/>
                             <field name="tca_is_out_of_scope"
-                                   readonly="move_type in ('in_invoice', 'in_refund')"/>
+                                   readonly="move_type in ('in_invoice', 'in_refund') or reversed_entry_id"/>
                             <field name="tca_buyer_reference"
                                    placeholder="e.g. PO-001/23"
                                    readonly="move_type in ('in_invoice', 'in_refund')"/>
@@ -114,6 +122,9 @@
                                    readonly="move_type in ('in_invoice', 'in_refund')"/>
                             <field name="tca_buyer_emirate"
                                    invisible="not tca_buyer_is_uae"
+                                   readonly="move_type in ('in_invoice', 'in_refund')"/>
+                            <field name="tca_payment_means_code"
+                                   invisible="tca_show_credit_note_fields"
                                    readonly="move_type in ('in_invoice', 'in_refund')"/>
                             <field name="tca_credit_note_reason"
                                    invisible="not tca_show_credit_note_fields"/>
@@ -159,13 +170,19 @@
                                    invisible="not tca_show_special_flags"/>
                             <field name="tca_flag_ecommerce"
                                    invisible="not tca_show_special_flags"/>
+                            <!-- Manual flag — NOT auto-detected from buyer country
+                                 (a foreign buyer alone isn't necessarily an export). -->
+                            <field name="tca_flag_export"
+                                   invisible="not tca_show_special_flags"/>
                             <!-- Raw BTAE-02 string kept invisible — computed from the
                                  booleans above. Read by the XML builder. -->
                             <field name="tca_transaction_type_flags" invisible="1"/>
                         </group>
-                        <group string="Additional Details" invisible="move_type in ('in_invoice', 'in_refund') or (not tca_flag_disclosed_agent and not tca_flag_continuous_supply and not tca_flag_summary_invoice and not tca_is_export)">
+                        <group string="Additional Details" invisible="move_type in ('in_invoice', 'in_refund') or (not tca_flag_disclosed_agent and not tca_flag_continuous_supply and not tca_flag_summary_invoice and not tca_is_export and not tca_flag_free_trade_zone and not tca_flag_ecommerce)">
                             <field name="tca_principal_id"
                                    invisible="not tca_flag_disclosed_agent"/>
+                            <field name="tca_buyer_beneficiary_id"
+                                   invisible="not tca_flag_free_trade_zone"/>
                             <field name="tca_contract_reference"
                                    invisible="not tca_flag_continuous_supply"
                                    placeholder="e.g. framework-1"/>
@@ -178,6 +195,12 @@
                             <field name="tca_export_declaration_number"
                                    invisible="not tca_is_export"
                                    placeholder="e.g. EXP-2026-001"/>
+                            <field name="tca_delivery_street"
+                                   invisible="not tca_flag_ecommerce"/>
+                            <field name="tca_delivery_city"
+                                   invisible="not tca_flag_ecommerce"/>
+                            <field name="tca_delivery_state_id"
+                                   invisible="not tca_flag_ecommerce"/>
                         </group>
                     </group>
                     <!-- Inbound only: read-only display of optional fields the seller populated.
@@ -225,6 +248,9 @@
                 <field name="tca_service_accounting_code" optional="hide" string="SAC"/>
                 <field name="tca_standard_item_id" optional="hide" string="GTIN / Standard ID"/>
                 <field name="tca_rc_description" optional="hide" string="RC Description"/>
+                <field name="tca_line_needs_exemption_reason" column_invisible="1"/>
+                <field name="tca_vat_exemption_reason_code" optional="hide" string="Exemption Reason"
+                       required="tca_line_needs_exemption_reason"/>
             </xpath>
 
         </field>

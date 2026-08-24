@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 # Part of TCA. See LICENSE file for full copyright and licensing details.
 
-import re
-
 from odoo import fields, models, api, _
 from odoo.exceptions import ValidationError
+
+from .. import constants
 
 # UAE-specific legal entity identifier type codes (schemeAgencyID values)
 UAE_LEGAL_ID_TYPES = [
@@ -15,7 +15,7 @@ UAE_LEGAL_ID_TYPES = [
 ]
 
 # UAE Emirates codes for CountrySubentity validation (ibr-128-ae)
-UAE_EMIRATES = ['AUH', 'DXB', 'SHJ', 'UAQ', 'FUJ', 'AJM', 'RAK']
+UAE_EMIRATES = list(constants.UAE_EMIRATES)
 
 
 class ResPartner(models.Model):
@@ -152,15 +152,33 @@ class ResPartner(models.Model):
     # UAE Peppol Participant ID (EndpointID @schemeID=0235): 10 digits
     # starting with "1" — happens to share the TIN shape, conceptually
     # different identifier.
-    _RE_UAE_TRN = re.compile(r'^1[a-zA-Z0-9]{14}$')
-    _RE_UAE_TIN = re.compile(r'^1[0-9]{9}$')
-    _RE_UAE_PARTICIPANT = re.compile(r'^1[0-9]{9}$')
-    _RE_EMAIL = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
+    _RE_UAE_TRN = constants.RE_UAE_TRN
+    _RE_UAE_TIN = constants.RE_UAE_TIN
+    _RE_UAE_PARTICIPANT = constants.RE_UAE_PARTICIPANT
+    _RE_EMAIL = constants.RE_EMAIL
     # Phone: allow digits + common separators (space, dash, parens, plus, dot).
     # At least 7 digits total. Loose pattern — strict E.164 validation would
     # need an external module.
-    _RE_PHONE = re.compile(r'^[\d\s\-\(\)\+\.]+$')
-    _UAE_PLACEHOLDER_PARTICIPANT = '1XXXXXXXXX'
+    _RE_PHONE = constants.RE_PHONE
+    _UAE_PLACEHOLDER_PARTICIPANT = constants.LEGACY_PLACEHOLDER_PARTICIPANT
+
+    # ── Helpers used by the partner-scope UAE checks below ────────────────────
+
+    def _tca_is_uae_party(self):
+        """True when this partner's country is AE. Empty-recordset-safe."""
+        return bool(self.country_id and self.country_id.code == 'AE')
+
+    def _tca_emirate(self):
+        """Resolve the emirate code for this partner: explicit tca_emirate,
+        falling back to state_id.code (mapped from Odoo's state code to the
+        PINT AE emirate code, e.g. 'DU' -> 'DXB') when it's a valid UAE
+        emirate. Empty-recordset-safe."""
+        self.ensure_one()
+        if self.tca_emirate:
+            return self.tca_emirate
+        state_code = self.state_id and self.state_id.code or ''
+        emirate = constants.UAE_STATE_CODE_TO_EMIRATE.get(state_code, state_code)
+        return emirate if emirate in constants.UAE_EMIRATES else ''
 
     def _build_error_peppol_endpoint(self, eas, endpoint):
         """
@@ -207,102 +225,60 @@ class ResPartner(models.Model):
             super(ResPartner, to_fill)._compute_peppol_endpoint()
 
     # ──────────────────────────────────────────────────────────────────────────
-    # CONSOLIDATED UAE PARTNER VALIDATION — runs on save (create/write).
-    # Fires only for UAE business partners (country=AE, is_company=True).
-    # Collects ALL field issues into a single ValidationError so the user
-    # sees every fix needed in one dialog instead of one-error-at-a-time.
+    # UAE PARTNER FORMAT VALIDATION — runs on save (create/write).
+    # Fires only for UAE business partners (country=AE, is_company=True) that
+    # are actually in-scope for a TCA-active company. Format-only: NEVER
+    # blocks an empty field. Completeness (street/city/emirate/legal-ID/etc.)
+    # is enforced later, at Confirm/Send time, in account_move — not here.
+    #
+    # Why format-only: the previous completeness-at-save version blocked
+    # res.company.create() itself, because the related Invoicing-tab fields
+    # (peppol_eas, tca_emirate, ...) hadn't propagated to the auto-created
+    # company partner yet when this constraint fired mid-create — a company
+    # couldn't be created and configured with TCA fields in one step. Moving
+    # completeness to confirm/send-time also allows progressive
+    # configuration: a partner can be saved half-filled and completed later,
+    # same as any other Odoo record.
     # ──────────────────────────────────────────────────────────────────────────
 
-    @api.constrains(
-        'name', 'is_company', 'country_id',
-        'street', 'city',
-        'vat',
-        'peppol_eas', 'peppol_endpoint',
-        'email', 'phone', 'mobile',
-        'tca_emirate', 'tca_legal_id_type', 'tca_trade_license',
-        'tca_legal_authority', 'tca_passport_country_id',
-    )
-    def _check_tca_partner_complete(self):
+    def _tca_scope_companies(self):
         """
-        Enforce UAE PINT AE mandatory fields + format rules on UAE business
-        partners. Returns a single dialog listing every issue.
+        TCA-active companies for which this partner is in scope: either the
+        partner itself is one of those companies' own partner, or the
+        partner is used as a customer/vendor on at least one TCA-active
+        company (checked loosely — via any TCA-active company existing at
+        all, since a partner can be shared across companies). Returns a
+        res.company recordset (possibly empty).
+        """
+        self.ensure_one()
+        Company = self.env['res.company'].sudo()
+        own_company = Company.search([('partner_id', '=', self.id)], limit=1)
+        if own_company:
+            return own_company if own_company.tca_is_active else Company
+        return Company.search([('tca_is_active', '=', True)], limit=1)
 
-        Scope: UAE company partners that the user has started configuring
-        for PINT AE — i.e. peppol_eas is '0235' OR at least one tca_* field
-        is set. Auto-created partners (e.g. the partner Odoo creates inside
-        `res.company.create`) carry none of these markers, so the check is
-        skipped and company creation isn't blocked. Once the user opens
-        the partner and fills any PINT AE field, the full set becomes
-        mandatory on the next save.
+    @api.constrains(
+        'is_company', 'country_id',
+        'vat', 'peppol_eas', 'peppol_endpoint',
+        'email', 'phone', 'mobile',
+    )
+    def _check_tca_partner_formats(self):
+        """
+        Validate the SHAPE of UAE-relevant fields when they're filled in —
+        never their presence. Scoped to UAE company partners relevant to a
+        TCA-active company, so unrelated partners never pay this cost.
         """
         for partner in self:
-            if not partner.is_company:
+            if not partner.is_company or not partner._tca_is_uae_party():
                 continue
-            if not (partner.country_id and partner.country_id.code == 'AE'):
-                continue
-            # Skip until the user has explicitly opted into PINT AE
-            # configuration on this partner.
-            opted_in = (
-                partner.peppol_eas == '0235'
-                or partner.tca_emirate
-                or partner.tca_legal_id_type
-                or partner.tca_trade_license
-                or partner.tca_legal_authority
-                or partner.tca_passport_country_id
-                or partner.tca_legal_form
-            )
-            if not opted_in:
+            if not partner._tca_scope_companies():
                 continue
 
             errors = []
 
-            # ── Mandatory fields ─────────────────────────────────────────────
-            if not partner.street:
-                errors.append(_('"Street" (IBT-035/050) is required.'))
-            if not partner.city:
-                errors.append(_('"City" (IBT-037/052) is required.'))
-            if not partner.vat:
-                errors.append(_('"Tax ID" / TRN (IBT-031/048) is required.'))
-            if not partner.peppol_eas:
-                errors.append(_(
-                    '"Peppol EAS" is required. Set it to 0235 in the "E-Invoicing" tab.'
-                ))
-            if not partner.peppol_endpoint:
-                errors.append(_(
-                    '"Peppol Endpoint" (IBT-034/049) is required.'
-                ))
-            if not partner.tca_emirate:
-                errors.append(_(
-                    '"Emirate" (ibr-128-ae) is required. '
-                    'Select AUH / DXB / SHJ / UAQ / FUJ / AJM / RAK.'
-                ))
-            if not partner.tca_legal_id_type:
-                errors.append(_(
-                    '"Legal ID Type" (BTAE-15/16) is required. '
-                    'Set TL / EID / PAS / CD.'
-                ))
-            if not partner.tca_trade_license:
-                errors.append(_(
-                    '"Trade License / Registration ID" (IBT-030/047) is required.'
-                ))
-
-            # ── Conditional fields based on Legal ID Type ────────────────────
-            if partner.tca_legal_id_type == 'TL' and not partner.tca_legal_authority:
-                errors.append(_(
-                    '"Issuing Authority" (BTAE-11/12) is required when '
-                    'Legal ID Type is Trade License.'
-                ))
-            if partner.tca_legal_id_type == 'PAS' and not partner.tca_passport_country_id:
-                errors.append(_(
-                    '"Passport Issuing Country" (BTAE-18/19) is required when '
-                    'Legal ID Type is Passport.'
-                ))
-
-            # ── Format checks ────────────────────────────────────────────────
-            # Accept either:
-            #   - 15-char TRN (UAE VAT registration), or
-            #   - 10-digit TIN (= first 10 digits of the TRN, per FTA).
-            # The XML builder derives the 10-digit TIN for IBT-032 emission.
+            # Accept either the 15-char TRN (UAE VAT registration) or the
+            # 10-digit TIN (first 10 digits of the TRN, per FTA). The XML
+            # builder derives the 10-digit TIN for IBT-032 emission.
             if partner.vat:
                 v = partner.vat.strip()
                 if not (self._RE_UAE_TRN.match(v) or self._RE_UAE_TIN.match(v)):

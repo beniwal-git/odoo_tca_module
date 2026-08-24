@@ -247,21 +247,26 @@ class TestInvoiceCancelBlock(TcaTestCase):
         with self.assertRaises(UserError):
             invoice.button_draft()
 
-    def test_action_tca_resend_resets_state(self):
+    def test_action_tca_resend_opens_wizard(self):
         """
-        action_tca_resend on an error invoice must:
-          1. Reset tca_move_state → 'not_sent'
-          2. Clear tca_submission_error
-          3. Return a window action dict
+        action_tca_resend on an error invoice must open the Send & Print
+        wizard for a fresh submission, WITHOUT eagerly resetting
+        tca_move_state/tca_submission_error — if the user opens the wizard
+        and cancels, the previous error context must remain visible. (There
+        is no more direct-resubmit branch: TCA's /resubmit/ endpoint is
+        XML/S3-only, which this module no longer uses — see
+        docs/PORTING_17_vs_19.md P2.2/P2.7. A resend is just a fresh
+        inline-JSON submission with a new unique invoice_number.)
         """
         invoice = self._make_invoice()
         invoice.write({
             'tca_move_state': 'error',
             'tca_submission_error': 'Connection timeout',
+            'tca_invoice_uuid': 'some-prior-tca-id',
         })
         result = invoice.action_tca_resend()
-        self.assertEqual(invoice.tca_move_state, 'not_sent')
-        self.assertFalse(invoice.tca_submission_error)
+        self.assertEqual(invoice.tca_move_state, 'error')
+        self.assertEqual(invoice.tca_submission_error, 'Connection timeout')
         self.assertEqual(result.get('type'), 'ir.actions.act_window')
         self.assertEqual(result.get('res_model'), 'account.move.send')
 

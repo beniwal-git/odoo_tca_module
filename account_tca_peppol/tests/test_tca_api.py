@@ -2,8 +2,8 @@
 # Part of TCA. See LICENSE file for full copyright and licensing details.
 """
 E5: OAuth2 token management — fetch, cache, proactive refresh
-E6: TCA-266 3-step outbound flow (POST /documents/ → S3 PUT → POST /invoices/)
-    + resubmission, status polling, inbound listing, XML download
+E6: inline-JSON outbound submission (POST /invoices/ with a `detail` tree),
+    status polling, inbound listing, XML download
 """
 
 import json
@@ -13,6 +13,7 @@ from unittest.mock import MagicMock, patch, call
 
 from odoo.tests import tagged
 
+from ..services.tca_api import TcaAuthError, TcaTransientError, TcaValidationError
 from .common import TcaTestCase
 
 # Module path for urlopen — must match where it is imported in tca_api.py
@@ -190,13 +191,14 @@ class TestTcaApiTokenManagement(TcaTestCase):
 @tagged('post_install', '-at_install')
 class TestTcaApiSendFlow(TcaTestCase):
     """
-    E6 — TCA-266 outbound invoice flow:
-        Step 1: POST /api/v1/documents/         → { upload_url, s3_uri, expires_in }
-        Step 2: PUT {upload_url} raw XML bytes  (no auth — presigned URL)
-        Step 3: POST /api/v1/invoices/          { name, invoice_number, source_file_path }
-                                                → { id, source, created_at }
+    E6 — Inline-JSON outbound invoice submission (P2.2 — the XML/S3 3-step
+    flow was removed entirely; submit_invoice_json is now the only outbound
+    path):
+        POST /api/v1/invoices/  { name, invoice_number, detail }
+            201 → { id, ... }               validated + queued
+            400 → per-field error dict      TcaValidationError
 
-    Also covers: status polling, resubmission, inbound listing, XML download.
+    Also covers: status polling, inbound listing, XML download.
     """
 
     def setUp(self):
@@ -207,73 +209,18 @@ class TestTcaApiSendFlow(TcaTestCase):
         self.company._set_tca_param('access_token', 'valid_bearer_token')
         self.company._set_tca_param('access_token_expires_at', str(future_expiry))
 
-    # ── Step 1: POST /api/v1/documents/ ──────────────────────────────────────
+    # ── POST /api/v1/invoices/ (inline JSON) ─────────────────────────────────
 
-    def test_get_document_upload_url_posts_to_documents(self):
-        """get_document_upload_url must POST to /api/v1/documents/ and return upload_url + s3_uri."""
-        api_resp = {
-            'upload_url': 'https://s3.amazonaws.com/bucket/key?sig=xyz',
-            's3_uri': 's3://tca-invoices/org-uuid/inv-uuid.xml',
-            'expires_in': 1200,
-        }
-        with patch(_URLOPEN, return_value=_mock_http_response(api_resp)) as mock_open:
-            result = self.api.get_document_upload_url(self.company)
-
-        req = mock_open.call_args[0][0]
-        self.assertIn('/api/v1/documents/', req.full_url)
-        self.assertEqual(req.get_method(), 'POST')
-        self.assertEqual(result['upload_url'], api_resp['upload_url'])
-        self.assertEqual(result['s3_uri'], api_resp['s3_uri'])
-
-    def test_get_document_upload_url_sends_bearer_token(self):
-        """get_document_upload_url must include Authorization: Bearer header."""
-        with patch(_URLOPEN, return_value=_mock_http_response({'upload_url': 'x', 's3_uri': 'y'})) as m:
-            self.api.get_document_upload_url(self.company)
-
-        req = m.call_args[0][0]
-        self.assertEqual(req.get_header('Authorization'), 'Bearer valid_bearer_token')
-
-    # ── Step 2: PUT presigned S3 URL ─────────────────────────────────────────
-
-    def test_upload_to_s3_sends_put_with_xml_bytes(self):
-        """upload_to_s3 must PUT raw bytes to the presigned URL."""
-        xml_bytes = b'<Invoice>test</Invoice>'
-        s3_resp = MagicMock()
-        s3_resp.status = 200
-        s3_resp.__enter__ = lambda s: s
-        s3_resp.__exit__ = MagicMock(return_value=False)
-
-        with patch(_URLOPEN, return_value=s3_resp) as mock_open:
-            self.api.upload_to_s3('https://s3.example.com/presigned', xml_bytes)
-
-        req = mock_open.call_args[0][0]
-        self.assertEqual(req.get_method(), 'PUT')
-        self.assertEqual(req.data, xml_bytes)
-
-    def test_upload_to_s3_has_no_authorization_header(self):
-        """S3 presigned PUT must NOT include an Authorization header."""
-        s3_resp = MagicMock()
-        s3_resp.status = 200
-        s3_resp.__enter__ = lambda s: s
-        s3_resp.__exit__ = MagicMock(return_value=False)
-
-        with patch(_URLOPEN, return_value=s3_resp) as mock_open:
-            self.api.upload_to_s3('https://s3.example.com/presigned', b'<x/>')
-
-        req = mock_open.call_args[0][0]
-        self.assertIsNone(req.get_header('Authorization'))
-
-    # ── Step 3: POST /api/v1/invoices/ ───────────────────────────────────────
-
-    def test_submit_invoice_payload_contains_new_fields(self):
-        """submit_invoice must POST { name, invoice_number, source_file_path } and return id."""
-        api_resp = {'id': 'inv-tca-001', 'source': 'odoo', 'created_at': '2025-01-01T00:00:00Z'}
+    def test_submit_invoice_json_payload_fields(self):
+        """submit_invoice_json must POST { name, invoice_number, detail } and return id."""
+        api_resp = {'id': 'inv-tca-001', 'status': 1}
+        detail = {'issue_date': '2025-01-01', 'lines': []}
         with patch(_URLOPEN, return_value=_mock_http_response(api_resp, status=201)) as mock_open:
-            result = self.api.submit_invoice(
+            result = self.api.submit_invoice_json(
                 company=self.company,
-                name='INV/2025/00001',
-                invoice_number='INV/2025/00001',
-                source_file_path='s3://tca-invoices/org/uuid.xml',
+                name='INV/2025/00001-a1b2c3d4',
+                invoice_number='INV/2025/00001-a1b2c3d4',
+                detail=detail,
             )
 
         req = mock_open.call_args[0][0]
@@ -281,48 +228,93 @@ class TestTcaApiSendFlow(TcaTestCase):
 
         self.assertIn('/api/v1/invoices/', req.full_url)
         self.assertEqual(req.get_method(), 'POST')
-        self.assertEqual(body['name'], 'INV/2025/00001')
-        self.assertEqual(body['invoice_number'], 'INV/2025/00001')
-        self.assertEqual(body['source_file_path'], 's3://tca-invoices/org/uuid.xml')
+        self.assertEqual(body['name'], 'INV/2025/00001-a1b2c3d4')
+        self.assertEqual(body['invoice_number'], 'INV/2025/00001-a1b2c3d4')
+        self.assertEqual(body['detail'], detail)
+        self.assertNotIn('source_file_path', body)
         self.assertEqual(result['id'], 'inv-tca-001')
 
-    def test_submit_invoice_deprecated_fields_absent(self):
-        """
-        Regression guard (TCA-266): submit_invoice payload must NOT contain any
-        pre-TCA-266 fields that were removed from the API.
-        """
+    def test_submit_invoice_json_sends_bearer_token(self):
+        """submit_invoice_json must include Authorization: Bearer header."""
         with patch(_URLOPEN, return_value=_mock_http_response({'id': 'x'}, status=201)) as m:
-            self.api.submit_invoice(
-                company=self.company,
-                name='TEST',
-                invoice_number='TEST',
-                source_file_path='s3://x',
-            )
-        body = json.loads(m.call_args[0][0].data.decode())
-        removed_fields = (
-            'document_type',
-            'document_location_path',
-            'sender_document_reference',
-            'trading_partner_peppol_id',
-            'trading_partner_country_code',
-            'sender_eas',
-            'sender_identifier',
-            'receiver_eas',
-            'receiver_identifier',
-        )
-        for field in removed_fields:
-            self.assertNotIn(field, body,
-                             f'Removed TCA-266 field "{field}" present in submit payload')
+            self.api.submit_invoice_json(self.company, 'X', 'X', {})
 
-    def test_submit_invoice_expects_201(self):
-        """submit_invoice must use expected_status=201 (TCA returns 201 Created)."""
-        api_resp = {'id': 'inv-201-test'}
-        # _mock_http_response returns status=200 by default; simulate 201
-        with patch(_URLOPEN, return_value=_mock_http_response(api_resp, status=201)) as m:
-            result = self.api.submit_invoice(
-                self.company, 'X', 'X', 's3://x'
+        req = m.call_args[0][0]
+        self.assertEqual(req.get_header('Authorization'), 'Bearer valid_bearer_token')
+
+    def test_submit_invoice_json_400_raises_validation_error(self):
+        """A 400 with a per-field error tree must raise TcaValidationError
+        with the flattened field-error list attached."""
+        from urllib.error import HTTPError
+        import io
+
+        error_body = json.dumps({
+            'lines': [{'item_name': ['This field is required.']}],
+            'buyer': {'country_code': ['This field is required.']},
+        }).encode()
+
+        def side_effect(req, timeout=30):
+            raise HTTPError(req.full_url, 400, 'Bad Request', {}, io.BytesIO(error_body))
+
+        with patch(_URLOPEN, side_effect=side_effect):
+            with self.assertRaises(TcaValidationError) as cm:
+                self.api.submit_invoice_json(self.company, 'X', 'X', {'lines': []})
+
+        self.assertTrue(cm.exception.tca_field_errors)
+        self.assertTrue(
+            any('item_name' in e for e in cm.exception.tca_field_errors)
+        )
+        self.assertTrue(
+            any('country_code' in e for e in cm.exception.tca_field_errors)
+        )
+
+    def test_submit_invoice_json_409_treated_as_duplicate(self):
+        """A 409 must be surfaced as {'tca_duplicate': True, ...} rather than raised."""
+        from urllib.error import HTTPError
+        import io
+
+        def side_effect(req, timeout=30):
+            raise HTTPError(
+                req.full_url, 409, 'Conflict', {}, io.BytesIO(b'{"id": "inv-existing"}')
             )
-        self.assertEqual(result['id'], 'inv-201-test')
+
+        with patch(_URLOPEN, side_effect=side_effect):
+            result = self.api.submit_invoice_json(self.company, 'X', 'X', {})
+
+        self.assertTrue(result.get('tca_duplicate'))
+        self.assertEqual(result.get('id'), 'inv-existing')
+
+    def test_submit_invoice_json_401_raises_auth_error(self):
+        """A 401 must raise TcaAuthError specifically (isinstance-checkable)."""
+        from urllib.error import HTTPError
+        import io
+
+        def side_effect(req, timeout=30):
+            raise HTTPError(req.full_url, 401, 'Unauthorized', {}, io.BytesIO(b'{}'))
+
+        with patch(_URLOPEN, side_effect=side_effect):
+            with self.assertRaises(TcaAuthError):
+                self.api.submit_invoice_json(self.company, 'X', 'X', {})
+
+    def test_submit_invoice_json_5xx_raises_transient_error(self):
+        """A 5xx must raise TcaTransientError (retry-safe), not TcaPermanentError."""
+        from urllib.error import HTTPError
+        import io
+
+        def side_effect(req, timeout=30):
+            raise HTTPError(req.full_url, 503, 'Service Unavailable', {}, io.BytesIO(b''))
+
+        with patch(_URLOPEN, side_effect=side_effect):
+            with self.assertRaises(TcaTransientError):
+                self.api.submit_invoice_json(self.company, 'X', 'X', {})
+
+    def test_submit_invoice_json_network_error_is_transient(self):
+        """A URLError (network unreachable) must raise TcaTransientError."""
+        from urllib.error import URLError
+
+        with patch(_URLOPEN, side_effect=URLError('Connection refused')):
+            with self.assertRaises(TcaTransientError):
+                self.api.submit_invoice_json(self.company, 'X', 'X', {})
 
     # ── Status polling ────────────────────────────────────────────────────────
 
@@ -342,30 +334,6 @@ class TestTcaApiSendFlow(TcaTestCase):
         self.assertEqual(req.get_method(), 'GET')
         self.assertEqual(result['status'], 1)
         self.assertIn('can_resubmit', result)
-
-    # ── Resubmission ──────────────────────────────────────────────────────────
-
-    def test_resubmit_invoice_sends_put_to_correct_url(self):
-        """resubmit_invoice must PUT { name, source_file_path } to /api/v1/invoices/{id}/resubmit/."""
-        api_resp = {'id': 'inv-abc', 'source': 's3://...', 'created_at': '2025-01-01T00:00:00Z'}
-        with patch(_URLOPEN, return_value=_mock_http_response(api_resp)) as m:
-            result = self.api.resubmit_invoice(
-                company=self.company,
-                tca_id='inv-abc',
-                name='INV/2025/00001',
-                source_file_path='s3://tca-invoices/org/new-uuid.xml',
-            )
-
-        req = m.call_args[0][0]
-        body = json.loads(req.data.decode())
-
-        self.assertIn('/api/v1/invoices/inv-abc/resubmit/', req.full_url)
-        self.assertEqual(req.get_method(), 'PUT')
-        self.assertEqual(body['name'], 'INV/2025/00001')
-        self.assertEqual(body['source_file_path'], 's3://tca-invoices/org/new-uuid.xml')
-        # Must not include invoice_number — resubmit payload is name + source_file_path only
-        self.assertNotIn('invoice_number', body)
-        self.assertEqual(result['id'], 'inv-abc')
 
     # ── Inbound listing ───────────────────────────────────────────────────────
 

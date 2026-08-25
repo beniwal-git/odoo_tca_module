@@ -64,7 +64,7 @@ class ResCompany(models.Model):
     # ── UAE Peppol identity (related to the company's partner record) ────────
     # Lets a company be configured for UAE e-invoicing from Settings →
     # Companies without leaving to edit the underlying partner in Contacts.
-    peppol_eas = fields.Char(related='partner_id.peppol_eas', readonly=False)
+    peppol_eas = fields.Selection(related='partner_id.peppol_eas', readonly=False)
     peppol_endpoint = fields.Char(related='partner_id.peppol_endpoint', readonly=False)
     tca_emirate = fields.Selection(related='partner_id.tca_emirate', readonly=False)
     tca_legal_id_type = fields.Selection(related='partner_id.tca_legal_id_type', readonly=False)

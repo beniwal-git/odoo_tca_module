@@ -254,14 +254,7 @@ class TestPintAeXmlConstraints(TcaTestCase):
             'partner_id': bad_partner.id,
             'company_id': self.company.id,
             'journal_id': self.journal.id,
-            'invoice_line_ids': [(0, 0, {
-                'name': 'Test line',
-                'quantity': 1.0,
-                'price_unit': 100.0,
-                'tax_ids': [(6, 0, [self.tax_5.id])],
-                'account_id': self.revenue_account.id,
-                'tca_commodity_type': 'S',
-            })],
+            'invoice_line_ids': [(0, 0, self._line_vals())],
         })
         invoice.action_post()
 
@@ -281,7 +274,7 @@ class TestPintAeXmlConstraints(TcaTestCase):
             'name': 'No VAT Partner',
             'country_id': self.uae.id,
             'peppol_eas': '0235',
-            'peppol_endpoint': '400000000000003',
+            'peppol_endpoint': '1400000003',
             'ubl_cii_format': 'ubl_pint_ae',
             # Intentionally no VAT/TRN
         })
@@ -290,14 +283,7 @@ class TestPintAeXmlConstraints(TcaTestCase):
             'partner_id': no_vat_partner.id,
             'company_id': self.company.id,
             'journal_id': self.journal.id,
-            'invoice_line_ids': [(0, 0, {
-                'name': 'Test line',
-                'quantity': 1.0,
-                'price_unit': 100.0,
-                'tax_ids': [(6, 0, [self.tax_5.id])],
-                'account_id': self.revenue_account.id,
-                'tca_commodity_type': 'S',
-            })],
+            'invoice_line_ids': [(0, 0, self._line_vals())],
         })
         invoice.action_post()
 
@@ -322,14 +308,11 @@ class TestPintAeXmlConstraints(TcaTestCase):
             'partner_id': self.partner.id,
             'company_id': self.company.id,
             'journal_id': self.journal.id,
-            'invoice_line_ids': [(0, 0, {
-                'name': 'No commodity type set',
-                'quantity': 2.0,
-                'price_unit': 50.0,
-                'tax_ids': [(6, 0, [self.tax_5.id])],
-                'account_id': self.revenue_account.id,
-                # tca_commodity_type intentionally omitted
-            })],
+            'invoice_line_ids': [(0, 0, self._line_vals(
+                name='No commodity type set', quantity=2.0, price_unit=50.0,
+                tca_commodity_type=False,  # intentionally omitted — tests the fallback (resolves to 'S')
+                tca_service_accounting_code='998314',  # ibr-185-ae, since the fallback is 'S'
+            ))],
         })
         invoice.action_post()
 
@@ -456,20 +439,42 @@ class TestPintAeBtae02ExportFlag(TcaTestCase):
                          f'User flags must pass through unchanged for AE buyer, got "{pei}"')
 
     def test_invalid_flags_reset_to_zeroes(self):
-        """Invalid flags (wrong length) are sanitised to 00000000 on export."""
+        """
+        _get_profile_execution_id defensively sanitises malformed flags to
+        '00000000' rather than crashing. Unit-tested directly on the builder
+        method — going through the full _export_invoice pipeline instead
+        hits a separate, harder constraint (_export_invoice_constraints
+        rejects a malformed tca_transaction_type_flags value outright, by
+        design), so the sanitizer path is never reached from a live export;
+        it only matters as a defensive fallback if something ever calls
+        _get_profile_execution_id directly against corrupted data.
+        """
         invoice = self._make_export_invoice()
         # Bypass the @api.constrains validator — simulate a corrupted DB
-        # state to verify the export-side sanitizer (in
-        # _get_profile_execution_id) is defensive.
+        # state to verify the export-side sanitizer is defensive.
         self.env.cr.execute(
             'UPDATE account_move SET tca_transaction_type_flags = %s WHERE id = %s',
             ('BADVALUE', invoice.id),
         )
         invoice.invalidate_recordset(['tca_transaction_type_flags'])
-        pei = self._get_pei(invoice)
+        builder = self._get_builder()
+        pei = builder._get_profile_execution_id(invoice)
         # Export is no longer forced from buyer country, so the reset value stands.
         self.assertEqual(pei, '00000000',
                          f'Invalid flags must reset to all zeroes, got "{pei}"')
+
+    def test_invalid_flags_rejected_by_export_constraints(self):
+        """The full _export_invoice pipeline rejects malformed
+        tca_transaction_type_flags outright rather than silently sanitising —
+        this is the actual behavior a real Confirm/Send would hit."""
+        invoice = self._make_export_invoice()
+        self.env.cr.execute(
+            'UPDATE account_move SET tca_transaction_type_flags = %s WHERE id = %s',
+            ('BADVALUE', invoice.id),
+        )
+        invoice.invalidate_recordset(['tca_transaction_type_flags'])
+        _xml_bytes, errors = self._export_xml(invoice)
+        self.assertTrue(errors, 'Malformed transaction type flags must be rejected on export')
 
     def test_profile_execution_id_still_8_chars_for_export(self):
         """ProfileExecutionID for export invoice must still be exactly 8 chars."""

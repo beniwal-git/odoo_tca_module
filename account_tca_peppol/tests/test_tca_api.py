@@ -362,17 +362,18 @@ class TestTcaApiSendFlow(TcaTestCase):
 
     # ── Inbound XML download ──────────────────────────────────────────────────
 
-    def test_get_document_download_url_encodes_s3_path(self):
-        """get_document_download_url must GET /api/v1/documents/download/ with URL-encoded s3_path."""
+    def test_get_document_download_url_posts_s3_uri(self):
+        """get_document_download_url must POST /api/v1/documents/download/
+        with { s3_uri: <path> } as the JSON body."""
         s3_path = 's3://tca-invoices/org/inv.xml'
         with patch(_URLOPEN, return_value=_mock_http_response({'download_url': 'https://s3/dl'})) as m:
             self.api.get_document_download_url(self.company, s3_path)
 
         req = m.call_args[0][0]
         self.assertIn('/api/v1/documents/download/', req.full_url)
-        # Path must be URL-encoded (colons and slashes percent-encoded)
-        self.assertNotIn('s3://', req.full_url)
-        self.assertIn('s3_path=', req.full_url)
+        self.assertEqual(req.get_method(), 'POST')
+        body = json.loads(req.data.decode())
+        self.assertEqual(body['s3_uri'], s3_path)
 
     def test_download_inbound_xml_two_step_flow(self):
         """

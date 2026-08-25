@@ -8,6 +8,7 @@ Model-level regression tests for the P0/P2 fixes ported from 19.0:
   - UAE VAT category N (Standard Rate Additional VAT) TaxAmount handling
 """
 
+from odoo import fields as odoo_fields
 from odoo.tests import tagged
 
 from .common import TcaTestCase
@@ -27,15 +28,9 @@ class TestAedCurrencyLock(TcaTestCase):
             'partner_id': self.partner.id,
             'company_id': self.company.id,
             'journal_id': self.journal.id,
+            'invoice_date': odoo_fields.Date.context_today(self.env['account.move']),
             'currency_id': usd.id,
-            'invoice_line_ids': [(0, 0, {
-                'name': 'Line',
-                'quantity': 1.0,
-                'price_unit': 100.0,
-                'tax_ids': [(6, 0, [self.tax_5.id])],
-                'account_id': self.revenue_account.id,
-                'tca_commodity_type': 'S',
-            })],
+            'invoice_line_ids': [(0, 0, self._line_vals())],
         })
         aed = self.env.ref('base.AED', raise_if_not_found=False)
         if aed:
@@ -52,15 +47,9 @@ class TestAedCurrencyLock(TcaTestCase):
             'partner_id': self.partner.id,
             'company_id': self.company.id,
             'journal_id': self.journal.id,
+            'invoice_date': odoo_fields.Date.context_today(self.env['account.move']),
             'currency_id': usd.id,
-            'invoice_line_ids': [(0, 0, {
-                'name': 'Line',
-                'quantity': 1.0,
-                'price_unit': 100.0,
-                'tax_ids': [(6, 0, [self.tax_5.id])],
-                'account_id': self.revenue_account.id,
-                'tca_commodity_type': 'S',
-            })],
+            'invoice_line_ids': [(0, 0, self._line_vals())],
         })
         self.assertEqual(invoice.currency_id, usd)
 
@@ -75,16 +64,10 @@ class TestAedCurrencyLock(TcaTestCase):
             'partner_id': self.partner.id,
             'company_id': self.company.id,
             'journal_id': self.journal.id,
+            'invoice_date': odoo_fields.Date.context_today(self.env['account.move']),
             'currency_id': usd.id,
             'tca_create_einvoice': False,
-            'invoice_line_ids': [(0, 0, {
-                'name': 'Line',
-                'quantity': 1.0,
-                'price_unit': 100.0,
-                'tax_ids': [(6, 0, [self.tax_5.id])],
-                'account_id': self.revenue_account.id,
-                'tca_commodity_type': 'S',
-            })],
+            'invoice_line_ids': [(0, 0, self._line_vals())],
         })
         self.assertEqual(invoice.currency_id, usd)
 
@@ -125,16 +108,10 @@ class TestOutOfScopeMirror(TcaTestCase):
             'partner_id': self.partner.id,
             'company_id': self.company.id,
             'journal_id': self.journal.id,
+            'invoice_date': odoo_fields.Date.context_today(self.env['account.move']),
             'reversed_entry_id': invoice.id,
             'tca_credit_note_reason': 'VD',
-            'invoice_line_ids': [(0, 0, {
-                'name': 'Return',
-                'quantity': 1.0,
-                'price_unit': 100.0,
-                'tax_ids': [(6, 0, [self.tax_5.id])],
-                'account_id': self.revenue_account.id,
-                'tca_commodity_type': 'S',
-            })],
+            'invoice_line_ids': [(0, 0, self._line_vals(name='Return'))],
         })
         self.assertTrue(reversal.tca_is_out_of_scope)
         self.assertEqual(reversal.tca_invoice_type_code, '81')
@@ -149,16 +126,10 @@ class TestOutOfScopeMirror(TcaTestCase):
             'partner_id': self.partner.id,
             'company_id': self.company.id,
             'journal_id': self.journal.id,
+            'invoice_date': odoo_fields.Date.context_today(self.env['account.move']),
             'reversed_entry_id': invoice.id,
             'tca_credit_note_reason': 'VD',
-            'invoice_line_ids': [(0, 0, {
-                'name': 'Return',
-                'quantity': 1.0,
-                'price_unit': 100.0,
-                'tax_ids': [(6, 0, [self.tax_5.id])],
-                'account_id': self.revenue_account.id,
-                'tca_commodity_type': 'S',
-            })],
+            'invoice_line_ids': [(0, 0, self._line_vals(name='Return'))],
         })
         self.assertFalse(reversal.tca_is_out_of_scope)
         self.assertEqual(reversal.tca_invoice_type_code, '381')
@@ -169,9 +140,8 @@ class TestVatCategoryN(TcaTestCase):
     """UAE VAT category N (Standard Rate Additional VAT) — ibr-108-ae: the rate
     is present (5%) but TaxAmount must be forced to 0 / not added to payable."""
 
-    def test_n_category_tax_amount_zeroed_in_xml(self):
-        from lxml import etree
-        n_tax = self.env['account.tax'].create({
+    def _make_n_tax(self):
+        return self.env['account.tax'].create({
             'name': 'Additional VAT (test)',
             'amount': 5.0,
             'amount_type': 'percent',
@@ -180,19 +150,17 @@ class TestVatCategoryN(TcaTestCase):
             'tax_group_id': self.tax_5.tax_group_id.id,
             'tca_tax_category': 'N',
         })
+
+    def test_n_category_tax_amount_zeroed_in_xml(self):
+        from lxml import etree
+        n_tax = self._make_n_tax()
         invoice = self.env['account.move'].with_company(self.company).create({
             'move_type': 'out_invoice',
             'partner_id': self.partner.id,
             'company_id': self.company.id,
             'journal_id': self.journal.id,
-            'invoice_line_ids': [(0, 0, {
-                'name': 'Line',
-                'quantity': 1.0,
-                'price_unit': 100.0,
-                'tax_ids': [(6, 0, [n_tax.id])],
-                'account_id': self.revenue_account.id,
-                'tca_commodity_type': 'S',
-            })],
+            'invoice_date': odoo_fields.Date.context_today(self.env['account.move']),
+            'invoice_line_ids': [(0, 0, self._line_vals(tax_ids=[(6, 0, [n_tax.id])]))],
         })
         invoice.action_post()
         xml_bytes, errors = self._export_xml(invoice)
@@ -211,28 +179,14 @@ class TestVatCategoryN(TcaTestCase):
         self.assertAlmostEqual(total, 0.0, places=2)
 
     def test_n_category_json_vat_amount_zero_but_rate_present(self):
-        n_tax = self.env['account.tax'].create({
-            'name': 'Additional VAT (test)',
-            'amount': 5.0,
-            'amount_type': 'percent',
-            'type_tax_use': 'sale',
-            'company_id': self.company.id,
-            'tax_group_id': self.tax_5.tax_group_id.id,
-            'tca_tax_category': 'N',
-        })
+        n_tax = self._make_n_tax()
         invoice = self.env['account.move'].with_company(self.company).create({
             'move_type': 'out_invoice',
             'partner_id': self.partner.id,
             'company_id': self.company.id,
             'journal_id': self.journal.id,
-            'invoice_line_ids': [(0, 0, {
-                'name': 'Line',
-                'quantity': 1.0,
-                'price_unit': 100.0,
-                'tax_ids': [(6, 0, [n_tax.id])],
-                'account_id': self.revenue_account.id,
-                'tca_commodity_type': 'S',
-            })],
+            'invoice_date': odoo_fields.Date.context_today(self.env['account.move']),
+            'invoice_line_ids': [(0, 0, self._line_vals(tax_ids=[(6, 0, [n_tax.id])]))],
         })
         invoice.action_post()
         detail = invoice._tca_build_json_detail()

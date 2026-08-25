@@ -5,6 +5,7 @@ E7: _compute_enable_tca — TCA option visibility in Send & Print wizard
 E8: _compute_checkbox_send_tca — auto-tick behaviour based on company setting
 """
 
+from odoo import fields
 from odoo.tests import tagged
 
 from .common import TcaTestCase
@@ -37,10 +38,13 @@ class TestComputeEnableTca(TcaTestCase):
         self.assertFalse(wizard.enable_tca,
                          'enable_tca should be False when TCA integration is inactive')
 
-    def test_enable_tca_false_for_non_pint_partner(self):
+    def test_enable_tca_true_regardless_of_partner_format(self):
         """
-        TCA option must not appear for partners with a non-PINT AE EDI format
-        (e.g. ubl_bis3 / blank), even if TCA is active.
+        _compute_enable_tca deliberately does NOT check the buyer's Peppol
+        registration/format — TCA handles routing to the buyer's AP, per its
+        own docstring. So enable_tca stays True (company active, move not
+        yet in-flight) even for a non-PINT-AE partner; the ubl_pint_ae
+        format check happens elsewhere (_tca_is_send_eligible, at Confirm).
         """
         self.company.tca_is_active = True
         non_pint_partner = self.env['res.partner'].create({
@@ -54,18 +58,12 @@ class TestComputeEnableTca(TcaTestCase):
             'partner_id': non_pint_partner.id,
             'company_id': self.company.id,
             'journal_id': self.journal.id,
-            'invoice_line_ids': [(0, 0, {
-                'name': 'Test',
-                'quantity': 1.0,
-                'price_unit': 100.0,
-                'account_id': self.revenue_account.id,
-            })],
+            'invoice_line_ids': [(0, 0, self._line_vals())],
         })
         invoice.action_post()
 
         wizard = _make_wizard(self.env, invoice, self.company)
-        self.assertFalse(wizard.enable_tca,
-                         'enable_tca should be False for non-PINT AE partners')
+        self.assertTrue(wizard.enable_tca)
 
     def test_enable_tca_true_for_pint_ae_partner_with_active_tca(self):
         """
@@ -147,7 +145,12 @@ class TestComputeCheckboxSendTca(TcaTestCase):
         Even with invoice_is_tca=True, checkbox_send_tca must be False when
         the partner is missing Peppol EAS/endpoint (tca_warning is set).
         """
-        self.company.tca_is_active = True
+        # Post with TCA inactive so Phase 1 confirm-time validation (which
+        # requires buyer EAS/endpoint whenever TCA is active) doesn't block
+        # confirming this deliberately-incomplete partner's invoice — then
+        # flip TCA active afterward, purely to reach the wizard's own
+        # warning compute.
+        self.company.tca_is_active = False
         self.company.invoice_is_tca = True
 
         # Partner without Peppol endpoint → will trigger tca_warning
@@ -162,15 +165,11 @@ class TestComputeCheckboxSendTca(TcaTestCase):
             'partner_id': incomplete_partner.id,
             'company_id': self.company.id,
             'journal_id': self.journal.id,
-            'invoice_line_ids': [(0, 0, {
-                'name': 'Test',
-                'quantity': 1.0,
-                'price_unit': 100.0,
-                'account_id': self.revenue_account.id,
-                'tca_commodity_type': 'S',
-            })],
+            'invoice_date': fields.Date.context_today(self.env['account.move']),
+            'invoice_line_ids': [(0, 0, self._line_vals())],
         })
         invoice.action_post()
+        self.company.tca_is_active = True
 
         wizard = _make_wizard(self.env, invoice, self.company)
         # tca_warning should be set for the incomplete partner

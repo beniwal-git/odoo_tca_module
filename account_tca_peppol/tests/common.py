@@ -12,6 +12,7 @@ Provides TcaTestCase, a TransactionCase subclass that sets up:
 All HTTP calls must be mocked in individual tests — no live network calls are made.
 """
 
+from odoo import fields
 from odoo.tests import TransactionCase, tagged
 
 
@@ -47,7 +48,7 @@ class TcaTestCase(TransactionCase):
             'street': 'Sheikh Zayed Road',
             'city': 'Dubai',
             'peppol_eas': '0235',
-            'peppol_endpoint': '100230400900003',
+            'peppol_endpoint': '1002304009',
             'tca_emirate': 'DXB',
             'tca_legal_id_type': 'TL',
             'tca_trade_license': 'DED-2024-000001',
@@ -68,9 +69,9 @@ class TcaTestCase(TransactionCase):
             'country_id': cls.uae.id,
             'street': 'Corniche Road',
             'city': 'Abu Dhabi',
-            'vat': '200000000000003',
+            'vat': '100000000000003',
             'peppol_eas': '0235',
-            'peppol_endpoint': '200000000000003',
+            'peppol_endpoint': '1000000000',
             'ubl_cii_format': 'ubl_pint_ae',
             'tca_emirate': 'AUH',
             'tca_legal_id_type': 'TL',
@@ -119,7 +120,12 @@ class TcaTestCase(TransactionCase):
                 'type_tax_use': 'sale',
                 'company_id': cls.company.id,
                 'tax_group_id': tax_group.id,
+                'tca_tax_category': 'S',
             })
+        # The CoA-provided 5% tax doesn't carry our PINT AE category field —
+        # the JSON/XML builders both key off it to determine vat_category_code.
+        if not cls.tax_5.tca_tax_category:
+            cls.tax_5.tca_tax_category = 'S'
 
         # ── Revenue account ───────────────────────────────────────────────────
         # CoA loading creates income accounts — reuse one.
@@ -136,7 +142,37 @@ class TcaTestCase(TransactionCase):
                 'company_id': cls.company.id,
             })
 
+        # ── Standard "Units" UoM ──────────────────────────────────────────────
+        # IBT-130 makes product_uom_id mandatory on every line; tests that
+        # build invoice_line_ids by hand (not via _make_invoice) need this too.
+        cls.uom_unit = cls.env.ref('uom.product_uom_unit')
+
     # ── Helpers ───────────────────────────────────────────────────────────────
+
+    def _line_vals(self, **overrides):
+        """
+        A minimal PINT-AE-valid product line dict: UoM set (IBT-130) and,
+        for a Services line (the default commodity type), the Service
+        Accounting Code set (ibr-185-ae). Callers building invoice_line_ids
+        by hand should start from this rather than duplicating the same
+        boilerplate — pass overrides to customize (e.g. commodity_type='G'
+        also needs tca_hs_code, which is NOT defaulted here since goods
+        fixtures usually want to set a specific code).
+        """
+        vals = {
+            'name': 'Test line',
+            'quantity': 1.0,
+            'price_unit': 100.0,
+            'tax_ids': [(6, 0, [self.tax_5.id])],
+            'account_id': self.revenue_account.id,
+            'tca_commodity_type': 'S',
+            'product_uom_id': self.uom_unit.id,
+            'tca_service_accounting_code': '998314',
+        }
+        vals.update(overrides)
+        if vals.get('tca_commodity_type') != 'S' and 'tca_service_accounting_code' not in overrides:
+            vals.pop('tca_service_accounting_code', None)
+        return vals
 
     def _make_invoice(self, move_type='out_invoice', quantity=10.0, price_unit=100.0,
                       commodity_type='S', currency=None, partner=None):
@@ -145,20 +181,33 @@ class TcaTestCase(TransactionCase):
         Pass partner= to override the default UAE buyer (e.g. for export tests).
         Returns a posted account.move.
         """
+        uom_unit = self.env.ref('uom.product_uom_unit', raise_if_not_found=False)
+        line_vals = {
+            'name': 'Consulting Services',
+            'quantity': quantity,
+            'price_unit': price_unit,
+            'tax_ids': [(6, 0, [self.tax_5.id])],
+            'account_id': self.revenue_account.id,
+            'tca_commodity_type': commodity_type,
+        }
+        if uom_unit:
+            line_vals['product_uom_id'] = uom_unit.id
+        # ibr-185-ae/ibr-184-ae: SAC mandatory for Services/Both, HS for Goods/Both.
+        if commodity_type in ('S', 'B'):
+            line_vals['tca_service_accounting_code'] = '998314'
+        if commodity_type in ('G', 'B'):
+            line_vals['tca_hs_code'] = '851712'
         vals = {
             'move_type': move_type,
             'partner_id': (partner or self.partner).id,
             'company_id': self.company.id,
             'journal_id': self.journal.id,
+            # TCA Phase 1 validation (_tca_validate_mandatory_fields) runs
+            # BEFORE super()._post()'s own invoice_date defaulting, so it
+            # must always be set here rather than relying on that fallback.
+            'invoice_date': fields.Date.context_today(self.env['account.move']),
             'tca_buyer_reference': 'PO-TEST-001',
-            'invoice_line_ids': [(0, 0, {
-                'name': 'Consulting Services',
-                'quantity': quantity,
-                'price_unit': price_unit,
-                'tax_ids': [(6, 0, [self.tax_5.id])],
-                'account_id': self.revenue_account.id,
-                'tca_commodity_type': commodity_type,
-            })],
+            'invoice_line_ids': [(0, 0, line_vals)],
         }
         # Credit notes need reason (BTAE-03) — use VD (Volume Discount, no preceding ref needed)
         if move_type in ('out_refund', 'in_refund'):

@@ -526,7 +526,11 @@ class AccountMove(models.Model):
     # (the OOS classification of a received document is fixed by the seller).
     tca_is_out_of_scope = fields.Boolean(
         string='Out of Scope (Commercial Invoice)',
-        default=False,
+        # No default= here — it would be injected into create() vals ahead
+        # of computation (same mechanism documented on the create() override
+        # below for tca_invoice_type_code), silently skipping the compute
+        # and breaking the OOS-mirrors-onto-reversal behavior. The compute's
+        # own else-branch already defaults to False when there's no reversal.
         compute='_compute_tca_is_out_of_scope',
         store=True,
         readonly=False,
@@ -754,16 +758,28 @@ class AccountMove(models.Model):
         during create — the recompute is skipped when the field is supplied
         directly in the create vals.
         """
+        aed = self.env.ref('base.AED', raise_if_not_found=False)
         for vals in vals_list:
             move_type = vals.get('move_type')
             type_code = vals.get('tca_invoice_type_code')
-            if not move_type or not type_code:
-                continue
-            is_refund = move_type in ('out_refund', 'in_refund')
-            if is_refund and type_code in self._TYPE_INVOICE_TO_REFUND:
-                vals['tca_invoice_type_code'] = self._TYPE_INVOICE_TO_REFUND[type_code]
-            elif not is_refund and type_code in self._TYPE_REFUND_TO_INVOICE:
-                vals['tca_invoice_type_code'] = self._TYPE_REFUND_TO_INVOICE[type_code]
+            if move_type and type_code:
+                is_refund = move_type in ('out_refund', 'in_refund')
+                if is_refund and type_code in self._TYPE_INVOICE_TO_REFUND:
+                    vals['tca_invoice_type_code'] = self._TYPE_INVOICE_TO_REFUND[type_code]
+                elif not is_refund and type_code in self._TYPE_REFUND_TO_INVOICE:
+                    vals['tca_invoice_type_code'] = self._TYPE_REFUND_TO_INVOICE[type_code]
+
+            # AED currency lock: same "explicit value bypasses the compute"
+            # issue as tca_invoice_type_code above — when currency_id is
+            # explicitly present in vals (as it usually is from the web
+            # client, which sends the onchange-populated value), the
+            # _compute_currency_id override never fires for this record.
+            if aed and 'currency_id' in vals and move_type in ('out_invoice', 'out_refund'):
+                company_id = vals.get('company_id') or self.env.company.id
+                company = self.env['res.company'].browse(company_id)
+                create_einvoice = vals.get('tca_create_einvoice', True)
+                if company.tca_is_active and create_einvoice:
+                    vals['currency_id'] = aed.id
         return super().create(vals_list)
 
     tca_is_self_billing = fields.Boolean(

@@ -7,6 +7,7 @@ dict construction, no HTTP involved — see test_tca_api.py for the API-layer
 (submit_invoice_json) tests.
 """
 
+from odoo import fields
 from odoo.tests import tagged
 
 from .. import constants
@@ -94,14 +95,10 @@ class TestJsonDetailBuilder(TcaTestCase):
             'partner_id': self.partner.id,
             'company_id': self.company.id,
             'journal_id': self.journal.id,
-            'invoice_line_ids': [(0, 0, {
-                'name': 'Exempt service',
-                'quantity': 1.0,
-                'price_unit': 100.0,
-                'tax_ids': [(6, 0, [exempt_tax.id])],
-                'account_id': self.revenue_account.id,
-                'tca_commodity_type': 'S',
-            })],
+            'invoice_date': fields.Date.context_today(self.env['account.move']),
+            'invoice_line_ids': [(0, 0, self._line_vals(
+                name='Exempt service', tax_ids=[(6, 0, [exempt_tax.id])],
+            ))],
         })
         invoice.action_post()
         detail = invoice._tca_build_json_detail()
@@ -141,16 +138,10 @@ class TestJsonDetailBuilder(TcaTestCase):
             'partner_id': self.partner.id,
             'company_id': self.company.id,
             'journal_id': self.journal.id,
+            'invoice_date': fields.Date.context_today(self.env['account.move']),
             'reversed_entry_id': invoice.id,
             'tca_credit_note_reason': 'DL8.61.1.D',
-            'invoice_line_ids': [(0, 0, {
-                'name': 'Return',
-                'quantity': 1.0,
-                'price_unit': 100.0,
-                'tax_ids': [(6, 0, [self.tax_5.id])],
-                'account_id': self.revenue_account.id,
-                'tca_commodity_type': 'S',
-            })],
+            'invoice_line_ids': [(0, 0, self._line_vals(name='Return'))],
         })
         reversal.action_post()
         detail = reversal._tca_build_json_detail()

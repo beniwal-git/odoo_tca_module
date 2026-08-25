@@ -24,6 +24,7 @@
     'depends': [
         'account',
         'account_edi_ubl_cii',
+        'l10n_ae',
     ],
     # No external Python dependencies. PINT AE validation runs as pure-Python
     # rules at Confirm (account_move._tca_validate_xml_pipeline), and the TCA
@@ -35,9 +36,10 @@
     # unreliable on some hosted deployments and added no coverage over the
     # Python rules + the AP's server-side check.
     #
-    # l10n_ae (UAE chart of accounts) is NOT a hard dependency — the addon works without
-    # it. Installing l10n_ae is strongly recommended for UAE companies as it provides the
-    # correct VAT tax groups and account structure expected by UAE e-invoicing.
+    # l10n_ae is a hard dependency: the test suite loads the 'ae' chart
+    # template, and Odoo's test runner forbids installing a module live
+    # from inside a test (non-transactional side effects). Also just
+    # generally correct — this addon is UAE-only.
     #
     # account_peppol uses the Odoo IAP proxy and conflicts with TCA's direct AP
     # integration. Both cannot be installed simultaneously.

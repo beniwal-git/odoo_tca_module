@@ -253,6 +253,18 @@
                        required="tca_line_needs_exemption_reason"/>
             </xpath>
 
+            <!-- ── Line tax picker: restrict to the canonical PINT AE taxes ──
+                 (S/E/O/AE/Z/N — see account.tax._tca_ensure_pint_taxes) once
+                 TCA e-invoicing is active for this document. Otherwise every
+                 company tax is offered, including untagged ones — picking one
+                 of those silently drops the VAT category from the outbound
+                 submission (TCA then rejects with "vat_category_code: This
+                 field is required"). Domain mirrors upstream account's, with
+                 the tca_tax_category filter added; update if upstream changes. -->
+            <xpath expr="//field[@name='invoice_line_ids']/tree/field[@name='tax_ids']" position="attributes">
+                <attribute name="domain">[('type_tax_use', '=?', parent.invoice_filter_type_domain), ('company_id', 'parent_of', parent.company_id)] + ([('tca_tax_category', '!=', False)] if parent.tca_company_is_active and parent.tca_create_einvoice else [('country_id', '=', parent.tax_country_id)])</attribute>
+            </xpath>
+
         </field>
     </record>
 

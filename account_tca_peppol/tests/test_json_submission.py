@@ -166,3 +166,75 @@ class TestJsonDetailBuilder(TcaTestCase):
         cn = self._make_invoice(move_type='out_refund')
         detail = cn._tca_build_json_detail()
         self.assertNotIn('payment_instructions', detail)
+
+    def test_amounts_rounded_to_2_decimals(self):
+        """TCA rejects any amount with more than 15 decimal places — Python
+        float arithmetic (discount %, repeated addition across lines) can
+        easily produce that many. Every emitted amount must be rounded."""
+        invoice = self.env['account.move'].with_company(self.company).create({
+            'move_type': 'out_invoice',
+            'partner_id': self.partner.id,
+            'company_id': self.company.id,
+            'journal_id': self.journal.id,
+            'invoice_date': fields.Date.context_today(self.env['account.move']),
+            'invoice_line_ids': [
+                (0, 0, self._line_vals(name='A', quantity=3, price_unit=0.1, discount=10.0)),
+                (0, 0, self._line_vals(name='B', quantity=7, price_unit=33.333333333)),
+            ],
+        })
+        invoice.action_post()
+        detail = invoice._tca_build_json_detail()
+
+        def _max_decimals(value):
+            s = f'{value!r}'
+            return len(s.split('.', 1)[1]) if '.' in s else 0
+
+        checked = 0
+        for line in detail['lines']:
+            for key in ('line_net_amount', 'item_net_price', 'item_gross_price',
+                        'line_amount_in_aed', 'vat_line_amount_in_aed'):
+                if key in line:
+                    self.assertLessEqual(_max_decimals(line[key]), 2,
+                                          f'{key}={line[key]!r} has more than 2 decimals')
+                    checked += 1
+            for vi in line['vat_info']:
+                if 'vat_rate' in vi:
+                    self.assertLessEqual(_max_decimals(vi['vat_rate']), 2)
+        for breakdown in detail['vat_breakdowns']:
+            for key in ('taxable_amount', 'tax_amount', 'vat_category_rate'):
+                if key in breakdown:
+                    self.assertLessEqual(_max_decimals(breakdown[key]), 2,
+                                          f'{key}={breakdown[key]!r} has more than 2 decimals')
+                    checked += 1
+        for key, value in detail['totals'].items():
+            self.assertLessEqual(_max_decimals(value), 2, f'totals.{key}={value!r}')
+            checked += 1
+        self.assertGreater(checked, 0, 'sanity: the test actually checked something')
+
+    def test_line_without_vat_category_pruned_key_still_absent_is_caught_earlier(self):
+        """A line whose tax has no tca_tax_category must be rejected by
+        _tca_validate_mandatory_fields BEFORE reaching the JSON builder —
+        this is what used to silently produce a TCA-side
+        'vat_category_code: This field is required' rejection."""
+        untagged_tax = self.env['account.tax'].create({
+            'name': 'Untagged 5% (test)',
+            'amount': 5.0,
+            'amount_type': 'percent',
+            'type_tax_use': 'sale',
+            'company_id': self.company.id,
+            'tax_group_id': self.tax_5.tax_group_id.id,
+            # tca_tax_category intentionally left unset
+        })
+        invoice = self.env['account.move'].with_company(self.company).create({
+            'move_type': 'out_invoice',
+            'partner_id': self.partner.id,
+            'company_id': self.company.id,
+            'journal_id': self.journal.id,
+            'invoice_date': fields.Date.context_today(self.env['account.move']),
+            'invoice_line_ids': [(0, 0, self._line_vals(tax_ids=[(6, 0, [untagged_tax.id])]))],
+        })
+        errors = invoice._tca_validate_mandatory_fields()
+        self.assertTrue(
+            any('pint_ae_vat_category' in e for e in errors),
+            f'Expected a pint_ae_vat_category error, got: {errors}',
+        )

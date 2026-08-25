@@ -399,15 +399,23 @@ class AccountMove(models.Model):
                 '1' if move.tca_flag_export else '0',
             ))
 
-    tca_payment_means_code = fields.Char(
+    tca_payment_means_code = fields.Selection(
+        selection=[
+            ('10', '10 — In cash'),
+            ('30', '30 — Credit transfer'),
+            ('42', '42 — Payment to bank account'),
+            ('48', '48 — Bank card'),
+            ('49', '49 — Direct debit'),
+            ('57', '57 — Standing agreement'),
+            ('ZZZ', 'ZZZ — Mutually defined'),
+        ],
         string='Payment Means Code (IBT-081)',
         default='30',
         copy=True,
         help=(
-            'IBT-081: UNCL4461 payment means code (e.g. "30" = Credit Transfer, '
-            '"42" = Payment to bank account, "48" = Bank card). '
-            'Required per ibr-191-ae except on credit notes, where PaymentMeans '
-            'is not emitted at all.'
+            'IBT-081: UNCL4461 payment means code, emitted at '
+            'cac:PaymentMeans/cbc:PaymentMeansCode. Required per ibr-191-ae '
+            'except on credit notes, where PaymentMeans is not emitted at all.'
         ),
     )
     tca_credit_note_reason = fields.Selection(
@@ -1580,6 +1588,21 @@ class AccountMove(models.Model):
                 errors.append(f'Line "{label}": at least one Tax must be applied.')
                 break
 
+            # [pint_ae_vat_category] ibr-sr-58: every line needs a UAE VAT
+            # Category (S/E/O/AE/Z/N) on at least one of its taxes — this is
+            # universal, not just for Out-of-Scope documents (that check is
+            # separate, below, and further restricts which categories are
+            # allowed). A line using a tax with no category set silently
+            # drops vat_category_code from the outbound submission and TCA
+            # rejects it as "This field is required".
+            if not any(getattr(t, 'tca_tax_category', '') for t in line.tax_ids):
+                errors.append(
+                    f'[pint_ae_vat_category] Line "{label}": the tax applied has no '
+                    '"UAE VAT Category" set. Pick one of the six PINT AE taxes '
+                    '(Settings → Accounting → Taxes) rather than a generic one.'
+                )
+                break
+
             # [pint_ae_oos_vat] For Out-of-Scope documents, every line tax
             # must carry a VAT category, restricted to the categories valid
             # for that OOS type (480: E/O/Z; 81 credit note: E/O).
@@ -1839,7 +1862,7 @@ class AccountMove(models.Model):
         # VAT rate (IBT-152) must be ABSENT for E/O — ibr-119-ae. Present
         # (incl. 0) for S/Z/AE/N.
         if cat not in self._TCA_NO_RATE_CATEGORIES:
-            vat_info['vat_rate'] = rate
+            vat_info['vat_rate'] = round(rate, 2)
         if cat == 'E':
             # Per-line override wins; fall back to the reason code on the tax.
             reason_code = (line.tca_vat_exemption_reason_code or '').strip() or (
@@ -1854,21 +1877,21 @@ class AccountMove(models.Model):
             'line_id': str(seq),
             'invoiced_quantity': line.quantity,
             'invoiced_quantity_unit_of_measure_code': self._tca_json_uom_code(line.product_uom_id),
-            'line_net_amount': net,
-            'item_net_price': net_unit,
-            'item_gross_price': line.price_unit,
+            'line_net_amount': round(net, 2),
+            'item_net_price': round(net_unit, 2),
+            'item_gross_price': round(line.price_unit, 2),
             'item_price_base_quantity': 1,
             'item_name': item_name,
             'item_description': item_name,  # IBT-154 mandatory — mirror name
             'item_type': commodity,  # BTAE-13 G/S/B
-            'line_amount_in_aed': net + vat_amt,  # BTAE-10
+            'line_amount_in_aed': round(net + vat_amt, 2),  # BTAE-10
             'vat_info': [vat_info],
         }
         # BTAE-08 (VAT line amount) must be ABSENT on Exempt lines —
         # schematron ibr-163-ae. Emit it for every other category (0 is
         # valid for Z/O/AE/N).
         if cat != 'E':
-            d['vat_line_amount_in_aed'] = vat_amt  # BTAE-08
+            d['vat_line_amount_in_aed'] = round(vat_amt, 2)  # BTAE-08
         # HS (goods) / SAC (services) go in their own arrays.
         if commodity in ('G', 'B') and line.tca_hs_code:
             d['classifications'] = [{
@@ -1912,21 +1935,26 @@ class AccountMove(models.Model):
                 'tax_amount': 0.0,
             })
             if cat not in self._TCA_NO_RATE_CATEGORIES:
-                g['vat_category_rate'] = rate
+                g['vat_category_rate'] = round(rate, 2)
             g['taxable_amount'] += line.price_subtotal
             if cat not in self._TCA_ZERO_VAT_CATEGORIES:
                 g['tax_amount'] += line.price_total - line.price_subtotal
+        # Accumulated in a Python float loop above — round once at the end
+        # rather than per-add, so intermediate rounding doesn't drift the sum.
+        for g in groups.values():
+            g['taxable_amount'] = round(g['taxable_amount'], 2)
+            g['tax_amount'] = round(g['tax_amount'], 2)
         return list(groups.values())
 
     def _tca_json_totals(self):
         """Layer 5 — totals (real API leaf names)."""
         self.ensure_one()
         return {
-            'sum_of_invoice_line_net_amount': self.amount_untaxed,
-            'invoice_total_amount_without_vat': self.amount_untaxed,
-            'invoice_total_vat_amount': self.amount_tax,
-            'invoice_total_amount_with_vat': self.amount_total,
-            'amount_due_for_payment': self.amount_total,
+            'sum_of_invoice_line_net_amount': round(self.amount_untaxed, 2),
+            'invoice_total_amount_without_vat': round(self.amount_untaxed, 2),
+            'invoice_total_vat_amount': round(self.amount_tax, 2),
+            'invoice_total_amount_with_vat': round(self.amount_total, 2),
+            'amount_due_for_payment': round(self.amount_total, 2),
         }
 
     def _tca_build_json_detail(self):

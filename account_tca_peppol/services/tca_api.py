@@ -462,7 +462,11 @@ class TcaApiService(models.AbstractModel):
                 raw = resp.read()
         except HTTPError as exc:
             body = exc.read().decode('utf-8', errors='replace')
-            _logger.error('TCA API HTTP %s error on %s:\n%s', exc.code, req.full_url, body)
+            # info, not error: a non-2xx response is an expected outcome the
+            # caller handles (duplicate, validation content, auth, retry) —
+            # not a bug here. Callers that treat it as a real failure raise
+            # a TcaError subclass below, which surfaces on its own.
+            _logger.info('TCA API HTTP %s response on %s:\n%s', exc.code, req.full_url, body)
 
             # Try to parse TCA error body
             try:
@@ -518,7 +522,7 @@ class TcaApiService(models.AbstractModel):
                     if err_tree is not None:
                         field_errors = _tca_flatten_field_errors(err_tree)
                         if field_errors:
-                            _logger.error(
+                            _logger.info(
                                 'TCA: 400 content validation on %s:\n%s',
                                 req.full_url, '\n'.join(field_errors),
                             )

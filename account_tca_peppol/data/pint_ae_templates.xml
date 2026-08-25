@@ -99,18 +99,22 @@
               inherit_id="account_edi_ubl_cii.ubl_20_InvoiceLineType"
               primary="True">
 
-        <!-- IBT-133: AccountingCost BEFORE InvoicePeriod per XSD -->
-        <xpath expr="//*[local-name()='InvoicePeriod']" position="before">
-            <t xmlns:cbc="urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2">
-                <cbc:AccountingCost t-if="vals.get('accounting_cost')"
-                                    t-out="vals['accounting_cost']"/>
-            </t>
-        </xpath>
-
-        <!-- IBT-132: OrderLineReference AFTER InvoicePeriod per XSD -->
-        <xpath expr="//*[local-name()='InvoicePeriod']" position="after">
+        <!-- IBT-133 AccountingCost, IBG-26 InvoicePeriod, IBT-132 OrderLineReference —
+             all after LineExtensionAmount, in XSD order. Upstream Odoo's
+             ubl_20_CommonLineType/ubl_20_InvoiceLineType dropped the InvoicePeriod
+             element it used to render (was present through at least mid-2026),
+             so — same as pint_ae_CreditNoteLineType already does — this template
+             renders all three itself instead of xpath-anchoring on an element the
+             parent might or might not provide. -->
+        <xpath expr="//*[local-name()='LineExtensionAmount']" position="after">
             <t xmlns:cac="urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2"
                xmlns:cbc="urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2">
+                <cbc:AccountingCost t-if="vals.get('accounting_cost')"
+                                    t-out="vals['accounting_cost']"/>
+                <cac:InvoicePeriod t-foreach="vals.get('invoice_period_vals_list', [])" t-as="ip">
+                    <cbc:StartDate t-if="ip.get('start_date')" t-out="ip['start_date']"/>
+                    <cbc:EndDate t-if="ip.get('end_date')" t-out="ip['end_date']"/>
+                </cac:InvoicePeriod>
                 <cac:OrderLineReference t-if="vals.get('order_line_ref')">
                     <cbc:LineID t-out="vals['order_line_ref']"/>
                 </cac:OrderLineReference>

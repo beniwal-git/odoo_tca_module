@@ -15,7 +15,10 @@ OAuth2 flow (client credentials):
   Refresh token: rotating — each use issues a new pair
 
 Outbound invoice flow (inline JSON — single call, synchronous validation):
-  POST /api/v1/invoices/  { name, invoice_number, detail }
+  POST /api/v1/invoices/
+    { name, invoice_number, issue_date, invoice_type_code,
+      detail: { transaction_type_code, invoice_currency_code, process_control,
+                seller, buyer, totals, vat_breakdowns, lines, ... } }
     201 → validated + queued for Peppol dispatch. Body: { id, ... }.
     400 → content validation failed; body is a per-field error dict, raised
           as TcaValidationError with the flattened field-error list.
@@ -285,9 +288,22 @@ class TcaApiService(models.AbstractModel):
     def submit_invoice_json(self, company, name, invoice_number, detail):
         """
         Inline-JSON submission (ASP JSON schema §9). One call — no S3 upload.
-        POST /api/v1/invoices/  body: { name, invoice_number, detail }
+        POST /api/v1/invoices/
+          {
+            name, invoice_number,
+            issue_date, invoice_type_code,   # root level
+            detail: { transaction_type_code, invoice_currency_code,
+                       process_control, seller, buyer, totals,
+                       vat_breakdowns, lines, ... }   # everything else
+          }
 
-        Validation is SYNCHRONOUS: TCA validates `detail` before returning.
+        `detail` (the argument) is the full tree built by
+        account.move._tca_build_json_detail() — issue_date/invoice_type_code
+        are pulled out of it here into the payload root; the rest stays
+        nested. Kept as one combined dict on the Odoo side (simpler to build
+        and test) and only split into this shape at the wire boundary.
+
+        Validation is SYNCHRONOUS: TCA validates the payload before returning.
           201 → validated + queued for Peppol dispatch. Body: { id, ... }.
           400 → content validation failed; body is a per-field error dict.
                 Surfaced by _execute_request as a TcaValidationError carrying
@@ -295,9 +311,12 @@ class TcaApiService(models.AbstractModel):
 
         Store the returned 'id' as tca_invoice_uuid on the Odoo invoice.
         """
+        detail = dict(detail)  # don't mutate the caller's dict
         payload = {
             'name': name,
             'invoice_number': invoice_number,
+            'issue_date': detail.pop('issue_date', ''),
+            'invoice_type_code': detail.pop('invoice_type_code', ''),
             'detail': detail,
         }
         return self._http_post(company, '/api/v1/invoices/', payload, expected_status=201)

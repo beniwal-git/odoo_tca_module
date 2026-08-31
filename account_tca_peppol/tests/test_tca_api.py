@@ -212,9 +212,16 @@ class TestTcaApiSendFlow(TcaTestCase):
     # ── POST /api/v1/invoices/ (inline JSON) ─────────────────────────────────
 
     def test_submit_invoice_json_payload_fields(self):
-        """submit_invoice_json must POST { name, invoice_number, detail } and return id."""
+        """submit_invoice_json must POST { name, invoice_number, issue_date,
+        invoice_type_code, detail } — issue_date/invoice_type_code pulled to
+        the payload root, everything else stays nested under detail."""
         api_resp = {'id': 'inv-tca-001', 'status': 1}
-        detail = {'issue_date': '2025-01-01', 'lines': []}
+        detail = {
+            'issue_date': '2025-01-01',
+            'invoice_type_code': '380',
+            'invoice_currency_code': 'AED',
+            'lines': [],
+        }
         with patch(_URLOPEN, return_value=_mock_http_response(api_resp, status=201)) as mock_open:
             result = self.api.submit_invoice_json(
                 company=self.company,
@@ -230,8 +237,19 @@ class TestTcaApiSendFlow(TcaTestCase):
         self.assertEqual(req.get_method(), 'POST')
         self.assertEqual(body['name'], 'INV/2025/00001-a1b2c3d4')
         self.assertEqual(body['invoice_number'], 'INV/2025/00001-a1b2c3d4')
-        self.assertEqual(body['detail'], detail)
+        # Pulled to root
+        self.assertEqual(body['issue_date'], '2025-01-01')
+        self.assertEqual(body['invoice_type_code'], '380')
+        # Not duplicated inside detail
+        self.assertNotIn('issue_date', body['detail'])
+        self.assertNotIn('invoice_type_code', body['detail'])
+        # Everything else stays nested
+        self.assertEqual(body['detail']['invoice_currency_code'], 'AED')
+        self.assertEqual(body['detail']['lines'], [])
         self.assertNotIn('source_file_path', body)
+        # Caller's dict must not be mutated by the pop()
+        self.assertIn('issue_date', detail)
+        self.assertIn('invoice_type_code', detail)
         self.assertEqual(result['id'], 'inv-tca-001')
 
     def test_submit_invoice_json_sends_bearer_token(self):

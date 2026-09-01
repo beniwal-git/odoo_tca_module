@@ -610,28 +610,75 @@ class AccountEdiXmlUBLPintAe(models.AbstractModel):
         ibr-191-ae: credit notes (381/81/261) MUST NOT carry a
         <cac:PaymentMeans> element — returning [] suppresses the entire group
         in the rendered XML (the QWeb t-foreach loop simply iterates 0×).
-        Otherwise, emit PaymentMeans using the user-selected
-        tca_payment_means_code (IBT-081) when set; Deemed-Supply invoices
-        fall back to 'ZZZ' (Mutually Defined) when no code was chosen, since
-        TCA's server still expects the element present even though the
-        schematron doesn't strictly require it for that use case.
+        Otherwise, emit ONE <cac:PaymentMeans> per tca_payment_means_ids line
+        — PaymentMeans is 0..n per PINT AE (IBG-16), so an invoice can
+        declare several (e.g. part cash, part credit card). Deemed-Supply
+        invoices with no line at all fall back to '1' (Instrument not
+        defined), since TCA's server still expects the element present even
+        though the schematron doesn't strictly require it for that use case.
+
+        Bank details (code 30, credit transfer) are attached from the
+        invoice's own partner_bank_id, same as upstream. Card details (codes
+        54/55) map to cac:CardAccount (IBG-18); mandate details (code 49)
+        map to cac:PaymentMandate (IBG-19). Both are capped at ONE per
+        document (ibr-066-ae / ibr-067-ae respectively) — only the first
+        line with the relevant details filled gets the block (a second such
+        line is blocked at confirm by
+        account_move._tca_validate_mandatory_fields, so this is just a
+        defensive fallback, not the enforcement point). None of these detail
+        fields are spec-mandatory even when their code is selected — only
+        PaymentMeansCode itself is (ibr-049-ae).
         """
         is_credit_note = invoice.move_type in ('out_refund', 'in_refund')
         if is_credit_note:
             return []
 
-        vals_list = super()._get_invoice_payment_means_vals_list(invoice)
-        code = invoice.tca_payment_means_code
-        if code:
-            if vals_list:
-                vals_list[0]['payment_means_code'] = code
-            else:
-                vals_list = [{'payment_means_code': code}]
-        elif not vals_list:
+        lines = invoice.tca_payment_means_ids
+        if not lines:
             flags = (invoice.tca_transaction_type_flags or '00000000').ljust(8, '0')
             deemed_supply = flags[1] == '1'
-            if deemed_supply:
-                vals_list = [{'payment_means_code': 'ZZZ'}]
+            return [{'payment_means_code': '1'}] if deemed_supply else []
+
+        base_vals = (super()._get_invoice_payment_means_vals_list(invoice) or [{}])[0]
+        card_used = False
+        mandate_used = False
+        vals_list = []
+        for index, line in enumerate(lines):
+            entry = {'payment_means_code': line.tca_payment_means_code}
+            if index == 0:
+                for key in ('payment_due_date', 'instruction_id', 'payment_id_vals'):
+                    if base_vals.get(key):
+                        entry[key] = base_vals[key]
+            if line.tca_payment_means_code == '30' and invoice.partner_bank_id:
+                entry['payee_financial_account_vals'] = self._get_financial_account_vals(
+                    invoice.partner_bank_id
+                )
+            if (
+                line.tca_payment_means_code in ('54', '55')
+                and not card_used
+                and (line.tca_card_pan or line.tca_card_holder_name)
+            ):
+                entry['card_account_vals'] = {
+                    'primary_account_number_id': line.tca_card_pan or '',
+                    'network_id': 'NA',
+                    'holder_name': line.tca_card_holder_name or '',
+                }
+                card_used = True
+            if (
+                line.tca_payment_means_code == '49'
+                and not mandate_used
+                and (line.tca_mandate_id or line.tca_payer_account_id)
+            ):
+                mandate_vals = {}
+                if line.tca_mandate_id:
+                    mandate_vals['id'] = line.tca_mandate_id
+                if line.tca_payer_account_id:
+                    mandate_vals['payer_financial_account_vals'] = {
+                        'id': line.tca_payer_account_id
+                    }
+                entry['payment_mandate_vals'] = mandate_vals
+                mandate_used = True
+            vals_list.append(entry)
         return vals_list
 
     # ──────────────────────────────────────────────────────────────────────────
@@ -1065,16 +1112,12 @@ class AccountEdiXmlUBLPintAe(models.AbstractModel):
                 )
                 break
 
-        # ── ibr-184/185/186-ae: Commodity type dependent fields ───────────────
+        # ── ibr-185/186-ae: Commodity type dependent fields ────────────────────
+        # HS code (IBT-158) is NOT client-side mandatory here for Goods/Both —
+        # it's only enforced for Reverse-Charge lines (see ibr-184-ae check in
+        # account_move.py). Service accounting code stays mandatory for S/B.
         for line in invoice.invoice_line_ids.filtered(lambda l: l.display_type == 'product'):
             ct = line.tca_effective_commodity_type
-            if ct == 'G' and not line.tca_hs_code:
-                constraints[f'pint_ae_hs_{line.id}'] = _(
-                    '[ibr-184-ae] Line "%s": Item type is Goods (G) — '
-                    'HS classification code (IBT-158) is mandatory.',
-                    line.name or str(line.id)
-                )
-                break
             if ct == 'S' and not getattr(line, 'tca_service_accounting_code', None):
                 constraints[f'pint_ae_sac_{line.id}'] = _(
                     '[ibr-185-ae] Line "%s": Item type is Services (S) — '
@@ -1082,14 +1125,13 @@ class AccountEdiXmlUBLPintAe(models.AbstractModel):
                     line.name or str(line.id)
                 )
                 break
-            if ct == 'B':
-                if not line.tca_hs_code or not getattr(line, 'tca_service_accounting_code', None):
-                    constraints[f'pint_ae_both_{line.id}'] = _(
-                        '[ibr-186-ae] Line "%s": Item type is Both (B) — '
-                        'both HS code (IBT-158) and service accounting code (BTAE-17) are mandatory.',
-                        line.name or str(line.id)
-                    )
-                    break
+            if ct == 'B' and not getattr(line, 'tca_service_accounting_code', None):
+                constraints[f'pint_ae_both_{line.id}'] = _(
+                    '[ibr-186-ae] Line "%s": Item type is Both (B) — '
+                    'service accounting code (BTAE-17) is mandatory.',
+                    line.name or str(line.id)
+                )
+                break
 
         # ── ibr-138-ae: Summary invoice → InvoicePeriod required ──────────────
         if len(flags) == 8 and flags[3] == '1':
@@ -1346,9 +1388,12 @@ class AccountEdiXmlUBLPintAe(models.AbstractModel):
         if node is not None and node.text:
             val = node.text.strip()
             if val in self._INVOICE_TYPE_KEYS:
-                # Self-billing applies only to the in-scope codes (380/381)
-                if is_selfbilling and val in ('380', '381'):
-                    invoice.tca_invoice_type_code = f'{val}_sb'
+                # Self-billing applies only to the in-scope codes (380/381).
+                # tca_invoice_type_code's selection stores self-billing as
+                # bare '389'/'261', not a '_sb' suffix — see its help text.
+                selfbilling_map = {'380': '389', '381': '261'}
+                if is_selfbilling and val in selfbilling_map:
+                    invoice.tca_invoice_type_code = selfbilling_map[val]
                 else:
                     invoice.tca_invoice_type_code = val
             else:

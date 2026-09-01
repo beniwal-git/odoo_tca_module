@@ -86,6 +86,56 @@
     </template>
 
     <!-- ════════════════════════════════════════════════════════════════════════
+         PaymentMeansType — adds CardAccount (IBG-18) and PaymentMandate
+         (IBG-19), neither rendered by the parent template. UBL 2.1 schema
+         order is: ... PaymentID*, CardAccount, PayeeFinancialAccount,
+         PaymentMandate — so CardAccount goes BEFORE PayeeFinancialAccount
+         and PaymentMandate goes AFTER it. Variable inside this template is
+         'vals' (set by t-call from the PaymentMeans foreach) — see
+         account_edi_xml_pint_ae._get_invoice_payment_means_vals_list for
+         'card_account_vals'/'payment_mandate_vals' construction and the
+         ibr-066-ae / ibr-067-ae one-per-document caps.
+         ════════════════════════════════════════════════════════════════════════ -->
+    <template id="pint_ae_PaymentMeansType"
+              inherit_id="account_edi_ubl_cii.ubl_20_PaymentMeansType"
+              primary="True">
+        <xpath expr="//*[local-name()='PayeeFinancialAccount']" position="before">
+            <t xmlns:cac="urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2"
+               xmlns:cbc="urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2">
+                <t t-if="vals.get('card_account_vals')">
+                    <t t-set="card_account_vals" t-value="vals['card_account_vals']"/>
+                    <cac:CardAccount>
+                        <cbc:PrimaryAccountNumberID
+                            t-out="card_account_vals.get('primary_account_number_id')"/>
+                        <cbc:NetworkID t-out="card_account_vals.get('network_id')"/>
+                        <cbc:HolderName
+                            t-if="card_account_vals.get('holder_name')"
+                            t-out="card_account_vals['holder_name']"/>
+                    </cac:CardAccount>
+                </t>
+            </t>
+        </xpath>
+        <xpath expr="//*[local-name()='PayeeFinancialAccount']" position="after">
+            <t xmlns:cac="urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2"
+               xmlns:cbc="urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2">
+                <t t-if="vals.get('payment_mandate_vals')">
+                    <t t-set="payment_mandate_vals" t-value="vals['payment_mandate_vals']"/>
+                    <cac:PaymentMandate>
+                        <cbc:ID
+                            t-if="payment_mandate_vals.get('id')"
+                            t-out="payment_mandate_vals['id']"/>
+                        <cac:PayerFinancialAccount
+                            t-if="payment_mandate_vals.get('payer_financial_account_vals')">
+                            <cbc:ID
+                                t-out="payment_mandate_vals['payer_financial_account_vals'].get('id')"/>
+                        </cac:PayerFinancialAccount>
+                    </cac:PaymentMandate>
+                </t>
+            </t>
+        </xpath>
+    </template>
+
+    <!-- ════════════════════════════════════════════════════════════════════════
          InvoiceLineType — PINT AE line additions.
          Adds: BuyersItemIdentification (IBT-156),
                OrderLineReference (IBT-132),

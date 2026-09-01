@@ -29,7 +29,18 @@ Outbound invoice flow (inline JSON — single call, synchronous validation):
   for the outbound wire payload.)
 
 Inbound invoice flow:
-  GET  /api/v1/invoices/?direction=2    list received invoices (each has invoice_xml_location_path)
+  GET  /api/v1/invoices/?direction=2&invoice_type_code__in=380,381,480,81
+       &created_at_from=...&created_at_to=...[&after=<id>]
+                                         list received invoices — created_at
+                                         window is REQUIRED on every call.
+                                         List rows may omit
+                                         invoice_xml_location_path (doc
+                                         guarantees it only on the detail
+                                         response) — fall back to
+                                         GET .../{id}/ per item when absent.
+  GET  /api/v1/invoices/{id}/           full detail incl. invoice_xml_location_path,
+                                         c3_mls_status, c5_mls_status,
+                                         internal_validation_status
   POST /api/v1/documents/download/      { s3_uri } → presigned download URL
   GET  {presigned_url}                  → raw XML bytes
 """
@@ -333,19 +344,42 @@ class TcaApiService(models.AbstractModel):
         """
         return self._http_get(company, f'/api/v1/invoices/{tca_id}/')
 
+    # AP inbound type codes only — 380 (Tax Invoice), 381 (Tax Credit Note),
+    # 480 (Commercial/OOS Invoice), 81 (Commercial/OOS Credit Note). Excludes
+    # self-billed 389/261: those are receivables you receive as a SELLER
+    # (§10.3 of the API docs), a different flow — pulling them here would
+    # misfile them as vendor bills.
+    AP_INBOUND_TYPE_CODES = '380,381,480,81'
+
     @api.model
-    def list_inbound_invoices(self, company, limit=50):
+    def list_inbound_invoices(self, company, created_at_from, created_at_to,
+                               after=None, limit=50):
         """
-        GET /api/v1/invoices/?direction=2
+        GET /api/v1/invoices/?direction=2&invoice_type_code__in=380,381,480,81
+             &created_at_from=...&created_at_to=...[&after=<id>]
         List received (inbound) invoices for the given company.
         Each item includes invoice_xml_location_path (S3 URI of the XML).
         Used by the fallback cron to import missed inbound documents.
+
+        created_at_from / created_at_to: ISO-8601 datetimes — REQUIRED on
+        every list call per the TCA API contract (not optional pagination
+        sugar; omitting them is rejected).
+        after: TCA invoice id cursor from a previous run — GET .../{id}/ of
+        an id TCA no longer recognises 400s ("object not found") rather than
+        returning an empty page; the caller should retry once without it.
+
         Returns a paginated DRF response: { count, next, previous, results: [...] }
         """
-        return self._http_get(
-            company,
-            f'/api/v1/invoices/?direction=2&page_size={limit}',
+        params = (
+            f'direction=2'
+            f'&invoice_type_code__in={self.AP_INBOUND_TYPE_CODES}'
+            f'&created_at_from={created_at_from}'
+            f'&created_at_to={created_at_to}'
+            f'&page_size={limit}'
         )
+        if after:
+            params += f'&after={after}'
+        return self._http_get(company, f'/api/v1/invoices/?{params}')
 
     @api.model
     def list_processing_outbound(self, company, limit=50):

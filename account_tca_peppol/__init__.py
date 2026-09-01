@@ -120,3 +120,25 @@ def _post_init_migrate_invoice_type_code(env):
               AND am.tca_invoice_type_code IS NOT NULL
               AND am.tca_flag_export IS NOT TRUE
         """)
+
+    # ── 6. tca_payment_means_code (single Selection) → tca.payment.means
+    # line migration. The field was replaced by a One2many so an invoice can
+    # declare several payment means; the old column survives on disk (Odoo
+    # doesn't drop columns for removed fields) so backfill one line per
+    # invoice that had a value and has no lines yet.
+    env.cr.execute("""
+        SELECT column_name FROM information_schema.columns
+        WHERE table_name = 'account_move' AND column_name = 'tca_payment_means_code'
+    """)
+    if env.cr.fetchone():
+        env.cr.execute("""
+            INSERT INTO tca_payment_means
+                (move_id, sequence, tca_payment_means_code, create_uid, create_date, write_uid, write_date)
+            SELECT am.id, 10, am.tca_payment_means_code, 1, NOW(), 1, NOW()
+            FROM account_move am
+            WHERE am.tca_payment_means_code IS NOT NULL
+              AND am.tca_payment_means_code != ''
+              AND NOT EXISTS (
+                  SELECT 1 FROM tca_payment_means pm WHERE pm.move_id = am.id
+              )
+        """)

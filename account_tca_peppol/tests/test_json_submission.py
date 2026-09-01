@@ -158,8 +158,19 @@ class TestJsonDetailBuilder(TcaTestCase):
         invoice = self._make_invoice()
         detail = invoice._tca_build_json_detail()
         self.assertEqual(
-            detail['payment_instructions'][0]['payment_means_type_code'],
-            invoice.tca_payment_means_code,
+            [pi['payment_means_type_code'] for pi in detail['payment_instructions']],
+            invoice.tca_payment_means_ids.mapped('tca_payment_means_code'),
+        )
+
+    def test_payment_instructions_multiple_lines(self):
+        """Partial cash + partial credit card — both lines must appear."""
+        invoice = self._make_invoice()
+        invoice.tca_payment_means_ids = [(5, 0, 0), (0, 0, {'tca_payment_means_code': '10'}),
+                                          (0, 0, {'tca_payment_means_code': '54'})]
+        detail = invoice._tca_build_json_detail()
+        self.assertEqual(
+            [pi['payment_means_type_code'] for pi in detail['payment_instructions']],
+            ['10', '54'],
         )
 
     def test_payment_instructions_absent_for_credit_note(self):

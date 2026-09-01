@@ -19,6 +19,7 @@ _get_ubl_cii_builder_from_xml_tree: PINT AE CustomizationID routed to our builde
 import logging
 import re
 import uuid
+from datetime import timedelta
 
 from odoo import _, api, fields, models
 from odoo.exceptions import UserError, ValidationError
@@ -36,12 +37,12 @@ _UAE_EMIRATES = list(constants.UAE_EMIRATES)
 
 # BTAE-03: Credit note reason codes (AE-CreditReason code list per UAE VAT Decree-Law)
 CREDIT_NOTE_REASONS = [
-    ('DL8.61.1.A', 'DL8.61.1.A — Supply was cancelled'),
-    ('DL8.61.1.B', 'DL8.61.1.B — Tax treatment changed'),
-    ('DL8.61.1.C', 'DL8.61.1.C — Consideration altered / Bad debt relief'),
-    ('DL8.61.1.D', 'DL8.61.1.D — Goods/services returned'),
-    ('DL8.61.1.E', 'DL8.61.1.E — Tax charged or applied in error'),
-    ('VD', 'VD — Volume Discount (no preceding invoice reference required)'),
+    ('DL8.61.1.A', 'Supply was cancelled'),
+    ('DL8.61.1.B', 'Tax treatment changed'),
+    ('DL8.61.1.C', 'Consideration altered / Bad debt relief'),
+    ('DL8.61.1.D', 'Goods/services returned'),
+    ('DL8.61.1.E', 'Tax charged or applied in error'),
+    ('VD', 'Volume Discount (no preceding invoice reference required)'),
 ]
 
 # TCA Invoice Status integer codes (from API spec)
@@ -177,7 +178,6 @@ class AccountMove(models.Model):
     _PREDEFINED_DEEMED = constants.PREDEFINED_DEEMED             # Deemed Supply (BTAE-02 pos 2 = 1)
     _PREDEFINED_NOT_SUBJECT = constants.PREDEFINED_NOT_SUBJECT   # Buyer not subject to UAE e-invoicing
     _PREDEFINED_EXPORT_NO_PEPPOL = constants.PREDEFINED_EXPORT_NO_PEPPOL  # Export, receiver not in Peppol (BTAE-02 pos 8 = 1)
-    # `1XXXXXXXXX` was the legacy placeholder used before BIS 1.5.3 was published.
     # Treat it as equivalent to "anonymous / not-in-Peppol buyer" for backward compat.
     _LEGACY_PLACEHOLDER_PARTICIPANT = constants.LEGACY_PLACEHOLDER_PARTICIPANT
     _ANON_BUYER_PIDS = constants.ANON_BUYER_PIDS
@@ -191,12 +191,12 @@ class AccountMove(models.Model):
         store=True,
         readonly=False,
         help=(
-            'Peppol Participant ID of the buyer (receiver of this invoice).\n'
-            'For UAE buyers: their Peppol Participant ID (10 digits) or full TRN (15 digits).\n'
+            'Peppol Participant ID of the buyer.\n'
+            'For UAE buyers: their Peppol Participant ID or full TRN.\n'
             'For non-UAE / out-of-scope cases, PINT AE BIS 1.5.3 mandates a predefined endpoint:\n'
-            '  9900000097 — Deemed Supply (BTAE-02 pos 2)\n'
+            '  9900000097 — Deemed Supply\n'
             '  9900000098 — Buyer not subject to UAE e-invoicing\n'
-            '  9900000099 — Export, receiver not registered in Peppol (BTAE-02 pos 8)\n'
+            '  9900000099 — Export, receiver not registered in Peppol\n'
             'Auto-populated from the customer record + transaction flags; editable per invoice.'
         ),
     )
@@ -233,10 +233,6 @@ class AccountMove(models.Model):
             return ''
 
         if partner.country_id.code == 'AE':
-            # (2) UAE buyer — 10-digit Peppol Participant ID only. Do NOT
-            # fall back to vat (TRN is a 15-digit tax identifier, not a
-            # Peppol routing endpoint). Missing endpoint surfaces at
-            # post-time validation.
             return partner.peppol_endpoint or ''
 
         if flags[7] == '1':
@@ -278,40 +274,40 @@ class AccountMove(models.Model):
     # tca_transaction_type_flags (below) is COMPUTED from these.
 
     tca_flag_free_trade_zone = fields.Boolean(
-        string='Free Trade Zone (UC8)', copy=True,
-        help='Tick if the supply involves a UAE Free Trade Zone (BTAE-02 position 1).',
+        string='Free Trade Zone', copy=True,
+        help='Tick if the supply involves a UAE Free Trade Zone.',
     )
     tca_flag_deemed_supply = fields.Boolean(
-        string='Deemed Supply (UC4)', copy=True,
+        string='Deemed Supply', copy=True,
         help='Tick for deemed-supply scenarios (e.g. goods for own use). '
-             'BTAE-02 position 2. Buyer participant ID auto-switches to predefined endpoint 9900000097.',
+             'Buyer participant ID auto-switches to predefined endpoint 9900000097.',
     )
     tca_flag_margin_scheme = fields.Boolean(
-        string='Margin Scheme (UC11)', copy=True,
-        help='Tick for second-hand goods / margin-scheme transactions (BTAE-02 position 3).',
+        string='Margin Scheme', copy=True,
+        help='Tick for second-hand goods / margin-scheme transactions.',
     )
     tca_flag_summary_invoice = fields.Boolean(
-        string='Summary Invoice (UC6)', copy=True,
-        help='Tick for an invoice consolidating multiple supplies over a period (BTAE-02 position 4). '
+        string='Summary Invoice', copy=True,
+        help='Tick for an invoice consolidating multiple supplies over a period. '
              'Requires Invoice Period Start/End.',
     )
     tca_flag_continuous_supply = fields.Boolean(
-        string='Continuous Supply (UC7)', copy=True,
-        help='Tick for subscriptions / recurring supplies (BTAE-02 position 5). '
+        string='Continuous Supply', copy=True,
+        help='Tick for subscriptions / recurring supplies. '
              'Requires Invoice Period Start/End, Contract Reference, and Billing Frequency.',
     )
     tca_flag_disclosed_agent = fields.Boolean(
-        string='Disclosed Agent Billing (UC5)', copy=True,
+        string='Disclosed Agent Billing', copy=True,
         help='Tick when invoicing as a disclosed agent on behalf of a principal '
-             '(BTAE-02 position 6). Requires Principal TRN.',
+             'Requires Principal TRN.',
     )
     tca_flag_ecommerce = fields.Boolean(
-        string='E-commerce (UC9)', copy=True,
-        help='Tick for online-channel transactions (BTAE-02 position 7).',
+        string='E-commerce', copy=True,
+        help='Tick for online-channel transactions.',
     )
     tca_flag_export = fields.Boolean(
-        string='Export (UC10)', copy=True,
-        help='Tick when this is an export supply (BTAE-02 position 8, UC10). '
+        string='Export', copy=True,
+        help='Tick when this is an export supply. '
              'Manual flag — NOT auto-detected from the buyer\'s country: a '
              'foreign buyer alone does not make a supply an "export" (e.g. it '
              'may be out-of-scope / not-subject-to-VAT instead). Composes '
@@ -359,7 +355,7 @@ class AccountMove(models.Model):
                 move.tca_show_special_flags = False
 
     tca_transaction_type_flags = fields.Char(
-        string='Transaction Type Flags (BTAE-02)',
+        string='Transaction Type Flags',
         size=8,
         compute='_compute_tca_transaction_type_flags',
         store=True,
@@ -399,23 +395,16 @@ class AccountMove(models.Model):
                 '1' if move.tca_flag_export else '0',
             ))
 
-    tca_payment_means_code = fields.Selection(
-        selection=[
-            ('10', '10 — In cash'),
-            ('30', '30 — Credit transfer'),
-            ('42', '42 — Payment to bank account'),
-            ('48', '48 — Bank card'),
-            ('49', '49 — Direct debit'),
-            ('57', '57 — Standing agreement'),
-            ('ZZZ', 'ZZZ — Mutually defined'),
-        ],
-        string='Payment Means Code (IBT-081)',
-        default='30',
+    tca_payment_means_ids = fields.One2many(
+        'tca.payment.means', 'move_id',
+        string='Payment Means (IBT-081)',
         copy=True,
+        default=lambda self: [(0, 0, {'tca_payment_means_code': '1'})],
         help=(
-            'IBT-081: UNCL4461 payment means code, emitted at '
-            'cac:PaymentMeans/cbc:PaymentMeansCode. Required per ibr-191-ae '
-            'except on credit notes, where PaymentMeans is not emitted at all.'
+            'IBT-081 / IBG-16: one or more payment means for this invoice '
+            '(e.g. part cash, part credit card) — each line renders as its '
+            'own cac:PaymentMeans element. Required per ibr-191-ae except on '
+            'credit notes, where PaymentMeans is not emitted at all.'
         ),
     )
     tca_credit_note_reason = fields.Selection(
@@ -477,26 +466,29 @@ class AccountMove(models.Model):
         string='Principal TRN (BTAE-14)',
         copy=True,
         help=(
-            'BTAE-14: Tax Registration Number of the Principal in a Disclosed Agent Billing '
+            'Tax Registration Number of the Principal in a Disclosed Agent Billing '
             'arrangement (UC5 / UC13).\n'
-            'Mandatory when BTAE-02 position 6 = 1 (Disclosed Agent flag set).\n'
+            'Mandatory when Disclosed Agent flag set.\n'
             'Carried over to credit notes — same principal usually applies.'
         ),
     )
     # ── Invoice Type Code (6 PINT AE variants) ───────────────────────────────
-    # `_sb` suffix = self-billing (buyer issues on behalf of supplier).
-    # XML emits the bare UNCL1001 code (380/381/480/81) via tca_uncl1001_code;
-    # the self-billing variants only differ in CustomizationID/ProfileID.
+    # 389/261 = self-billing (buyer issues on behalf of supplier). The XML's
+    # actual cbc:InvoiceTypeCode/cbc:CreditNoteTypeCode element still carries
+    # the bare UNCL1001 code (380/381) — see tca_uncl1001_code, computed via
+    # _SELF_BILLING_TO_UNCL1001 below. Self-billing is distinguished only via
+    # CustomizationID/ProfileID (see PINT_AE_SELFBILLING_* in
+    # account_edi_xml_pint_ae.py), not the InvoiceTypeCode value itself.
 
-    _TYPE_INVOICE_TO_REFUND = {'380': '381', '380_sb': '381_sb', '480': '81'}
-    _TYPE_REFUND_TO_INVOICE = {'381': '380', '381_sb': '380_sb', '81': '480'}
+    _TYPE_INVOICE_TO_REFUND = {'380': '381', '389': '261', '480': '81'}
+    _TYPE_REFUND_TO_INVOICE = {'381': '380', '261': '389', '81': '480'}
 
     tca_invoice_type_code = fields.Selection(
         selection=[
             ('380', '380 — Tax Invoice'),
             ('381', '381 — Tax Credit Note'),
-            ('380_sb', 'Self-Billing Tax Invoice'),
-            ('381_sb', 'Self-Billing Tax Credit Note'),
+            ('389', '389 - Self-Billing Tax Invoice'),
+            ('261', '261 - Self-Billing Tax Credit Note'),
             ('480', '480 — Out-of-Scope Invoice'),
             ('81', '81 — Out-of-Scope Credit Note'),
         ],
@@ -509,8 +501,8 @@ class AccountMove(models.Model):
             'PINT AE invoice type code.\n'
             '380: Tax Invoice — standard sale with UAE VAT\n'
             '381: Tax Credit Note — reverses a 380\n'
-            'Self-Billing Tax Invoice: buyer issues 380 on behalf of supplier (UC4)\n'
-            'Self-Billing Tax Credit Note: buyer issues 381 on behalf of supplier (UC5)\n'
+            '389: Self-Billing Tax Invoice: buyer issues 380 on behalf of supplier (UC4)\n'
+            '261: Self-Billing Tax Credit Note: buyer issues 381 on behalf of supplier (UC5)\n'
             '480: Out-of-Scope Invoice — not subject to UAE VAT\n'
             '81: Out-of-Scope Credit Note — reverses a 480\n'
             'Self-billing variants emit the standard 380/381 UNCL1001 code with '
@@ -545,7 +537,7 @@ class AccountMove(models.Model):
         recursive=True,
         copy=True,
         help='Tick to issue a Commercial Invoice — a document NOT subject to '
-             'UAE VAT (PINT AE code 480, or 81 for credit notes). '
+             'UAE VAT '
              'Examples: financial services, supplies outside the UAE VAT scope, '
              'transactions with non-residents. Leave unticked for standard Tax '
              'Invoices (codes 380 / 381).',
@@ -687,7 +679,7 @@ class AccountMove(models.Model):
             if move.tca_is_inbound:
                 continue
             # Preserve self-billing variants (no _sb checkbox UI yet).
-            if move.tca_invoice_type_code in ('380_sb', '381_sb'):
+            if move.tca_invoice_type_code in ('389', '261'):
                 continue
 
             if move.move_type in ('out_invoice', 'in_invoice'):
@@ -697,17 +689,22 @@ class AccountMove(models.Model):
             else:
                 move.tca_invoice_type_code = False
 
+    # Self-billing type codes map to their bare UNCL1001 equivalent — the
+    # XML/JSON still emits 380/381, only the CustomizationID differs (see
+    # tca_invoice_type_code's help text).
+    _SELF_BILLING_TO_UNCL1001 = {'389': '380', '261': '381'}
+
     @api.depends('tca_invoice_type_code')
     def _compute_tca_uncl1001_code(self):
         for move in self:
             code = move.tca_invoice_type_code or ''
-            move.tca_uncl1001_code = code[:-3] if code.endswith('_sb') else (code or False)
+            move.tca_uncl1001_code = self._SELF_BILLING_TO_UNCL1001.get(code, code or False)
 
     @api.depends('tca_invoice_type_code')
     def _compute_tca_type_visibility(self):
         for move in self:
             code = move.tca_invoice_type_code or ''
-            move.tca_show_credit_note_fields = code in ('381', '381_sb', '81')
+            move.tca_show_credit_note_fields = code in ('381', '261', '81')
             move.tca_is_out_of_scope_type = code in ('480', '81')
 
     @api.onchange('tca_invoice_type_code')
@@ -796,7 +793,7 @@ class AccountMove(models.Model):
         store=True,
         copy=True,
         help=(
-            'UC4/UC5: True when invoice type is a self-billing variant — '
+            'True when invoice type is a self-billing variant — '
             'buyer issues the invoice on behalf of the supplier. '
             'Derived from tca_invoice_type_code (the _sb variants).\n'
             'Sets CustomizationID to selfbilling variant and ProfileID to selfbilling in PINT AE XML.'
@@ -805,8 +802,10 @@ class AccountMove(models.Model):
 
     @api.depends('tca_invoice_type_code')
     def _compute_tca_is_self_billing(self):
+        # Stored codes are bare '389'/'261' (no _sb suffix — see
+        # tca_invoice_type_code's help text and _SELF_BILLING_TO_UNCL1001).
         for move in self:
-            move.tca_is_self_billing = (move.tca_invoice_type_code or '').endswith('_sb')
+            move.tca_is_self_billing = (move.tca_invoice_type_code or '') in ('389', '261')
     tca_contract_value = fields.Char(
         string='Contract Value (BTAE-05)',
         copy=True,
@@ -828,7 +827,7 @@ class AccountMove(models.Model):
             ('HYR', 'Half-Yearly'),
             ('OTH', 'Others'),
         ],
-        string='Billing Frequency (BTAE-06)',
+        string='Billing Frequency',
         copy=True,
         help=(
             'BTAE-06: Frequency of billing for Continuous Supply (UC11) invoices.\n'
@@ -837,20 +836,20 @@ class AccountMove(models.Model):
         ),
     )
     tca_export_declaration_number = fields.Char(
-        string='Export Declaration No. (BTAE-21)',
+        string='Export Declaration Number',
         copy=True,
         help=(
-            'BTAE-21: Export declaration number for Exports (UC14).\n'
+            'Export declaration number for Exports.\n'
             'Rendered as StatementDocumentReference/ID.\n'
             'Carried over to export credit notes — same declaration usually applies.'
         ),
     )
     tca_incoterms = fields.Char(
-        string='Incoterms (BTAE-22)',
+        string='Incoterms',
         size=3,
         copy=True,
         help=(
-            'BTAE-22: Incoterms code for Exports (UC14).\n'
+            'Incoterms code for Exports.\n'
             'Rendered as Delivery/DeliveryTerms/ID with schemeID="Incoterms".\n'
             'Example: CIF, FOB, EXW.'
         ),
@@ -1278,7 +1277,7 @@ class AccountMove(models.Model):
             )
 
         type_code = invoice.tca_invoice_type_code or ''
-        is_credit_note = type_code in ('381', '381_sb', '81')
+        is_credit_note = type_code in ('381', '261', '81')
 
         # IBT-009: Payment Due Date — mandatory for ALL invoice types incl. credit notes
         if not invoice.invoice_date_due and not invoice.invoice_payment_term_id:
@@ -1391,11 +1390,40 @@ class AccountMove(models.Model):
         if (
             not is_credit_note
             and not invoice.tca_flag_deemed_supply
-            and not invoice.tca_payment_means_code
+            and not invoice.tca_payment_means_ids
         ):
             errors.append(
-                '[pint_ae_payment_means] "Payment Means Code" (IBT-081) is required. '
-                'Set it in the "Invoice & Buyer" section.'
+                '[pint_ae_payment_means] At least one "Payment Means" (IBT-081) line is '
+                'required for this document (not a credit note, not Deemed Supply). '
+                'Add one in the "Invoice & Buyer" section.'
+            )
+
+        # [pint_ae_card_account] ibr-066-ae: an invoice may carry at most ONE
+        # CardAccount block — block confirm if 2+ payment-means lines both
+        # have card details (PAN/holder name) filled in.
+        card_detail_lines = invoice.tca_payment_means_ids.filtered(
+            lambda pm: pm.tca_card_pan or pm.tca_card_holder_name
+        )
+        if len(card_detail_lines) > 1:
+            errors.append(
+                '[pint_ae_card_account] "Payment Means": only ONE line may carry card '
+                'details (Card Number / Card Holder Name) — PINT AE allows at most one '
+                'CardAccount per invoice (ibr-066-ae). Clear the card details on all but '
+                'one line.'
+            )
+
+        # [pint_ae_payment_mandate] ibr-067-ae: an invoice may carry at most
+        # ONE PaymentMandate block — block confirm if 2+ payment-means lines
+        # both have mandate details (mandate ref/payer account) filled in.
+        mandate_detail_lines = invoice.tca_payment_means_ids.filtered(
+            lambda pm: pm.tca_mandate_id or pm.tca_payer_account_id
+        )
+        if len(mandate_detail_lines) > 1:
+            errors.append(
+                '[pint_ae_payment_mandate] "Payment Means": only ONE line may carry '
+                'mandate details (Mandate Reference / Payer Account) — PINT AE allows '
+                'at most one PaymentMandate per invoice (ibr-067-ae). Clear the mandate '
+                'details on all but one line.'
             )
 
         # ── Seller (company) mandatory fields ────────────────────────────────
@@ -2087,10 +2115,12 @@ class AccountMove(models.Model):
             detail['invoicing_period'] = dict(obj)
 
         # payment_instructions — required for all doc types except credit
-        # notes / deemed supply. IBT-081 payment means type code.
-        if not is_credit_note and not self.tca_flag_deemed_supply and self.tca_payment_means_code:
+        # notes / deemed supply. IBT-081 payment means type code, one entry
+        # per tca_payment_means_ids line (an invoice may declare several).
+        if not is_credit_note and not self.tca_flag_deemed_supply and self.tca_payment_means_ids:
             detail['payment_instructions'] = [
-                {'payment_means_type_code': self.tca_payment_means_code}
+                {'payment_means_type_code': pm.tca_payment_means_code}
+                for pm in self.tca_payment_means_ids
             ]
 
         # Strip empty strings / None / empty containers so TCA does not
@@ -2501,6 +2531,12 @@ class AccountMove(models.Model):
                     'TCA cron: status poll failed — %s', exc
                 ))
 
+    # First-ever run for a company has no stored cursor — look back this far
+    # so nothing sent before the module/webhook was set up gets missed.
+    # Bounded window still satisfies the API's "created_at window required"
+    # contract; subsequent runs narrow it to since-last-successful-run.
+    _TCA_INBOUND_FIRST_RUN_LOOKBACK_DAYS = 30
+
     @api.model
     def _cron_tca_pull_inbound_invoices(self):
         """
@@ -2515,24 +2551,36 @@ class AccountMove(models.Model):
                raw XML attached so accounting staff can manually process it.
           G-4: Follow DRF pagination (next URL) to import ALL inbound invoices,
                not just the first page of 50.
-          G-6: Cursor-based tracking via tca_last_inbound_sync ir.config_parameter
-               — only fetches invoices created after the last successful run
-               (using created_after query param if supported, otherwise UUID
-               deduplication for the full list).
+          G-6: Cursor-based tracking — created_at_from/created_at_to window
+               (REQUIRED by the API on every list call) plus an after=<id>
+               cursor from the last successful run. A stale after (TCA no
+               longer recognises the id) 400s rather than returning an empty
+               page — caught and retried once without it, same window.
 
         Deduplication: tca_invoice_uuid — already-imported invoices are skipped.
         """
         ICP = self.env['ir.config_parameter'].sudo()
         active_companies = self.env['res.company'].search([('tca_is_active', '=', True)])
         api_svc = self.env['tca.api.service']
+        now = fields.Datetime.now()
 
         for company in active_companies:
-            cursor_key = f'tca.{company.id}.last_inbound_sync'
-            last_sync = ICP.get_param(cursor_key, '')
+            time_key = f'tca.{company.id}.last_inbound_sync_time'
+            after_key = f'tca.{company.id}.last_inbound_after_id'
+            last_sync_time = ICP.get_param(time_key, '')
+            last_after_id = ICP.get_param(after_key, '') or None
+
+            if last_sync_time:
+                created_at_from = last_sync_time
+            else:
+                lookback = now - timedelta(days=self._TCA_INBOUND_FIRST_RUN_LOOKBACK_DAYS)
+                created_at_from = lookback.strftime('%Y-%m-%dT%H:%M:%SZ')
+            created_at_to = now.strftime('%Y-%m-%dT%H:%M:%SZ')
 
             try:
                 self._tca_pull_inbound_for_company(
-                    api_svc, company, ICP, cursor_key, last_sync
+                    api_svc, company, ICP, time_key, after_key,
+                    created_at_from, created_at_to, last_after_id,
                 )
             except Exception as exc:
                 _logger.error(
@@ -2541,34 +2589,46 @@ class AccountMove(models.Model):
                 )
 
     @api.model
-    def _tca_pull_inbound_for_company(self, api_svc, company, ICP, cursor_key, last_sync):
+    def _tca_pull_inbound_for_company(self, api_svc, company, ICP, time_key, after_key,
+                                       created_at_from, created_at_to, after_id):
         """
         Pull and import all new inbound invoices for one company.
         Paginates through all result pages (G-4).
-        Updates the cursor param after each successful import batch (G-6).
+        Updates both cursor params after a successful run (G-6).
         """
-        # Fetch page 1 — pass created_after cursor if TCA supports it
-        result = api_svc.list_inbound_invoices(company, limit=50)
-
-        latest_created_at = last_sync  # track newest timestamp seen this run
+        try:
+            result = api_svc.list_inbound_invoices(
+                company, created_at_from, created_at_to, after=after_id, limit=50
+            )
+        except Exception as exc:
+            if after_id:
+                # Stale after cursor (TCA no longer recognises that id) 400s
+                # instead of an empty page — retry once without it, same
+                # window. tca_invoice_uuid dedup below covers any overlap.
+                _logger.warning(
+                    'TCA cron: list_inbound_invoices with after=%s failed for '
+                    'company %s (%s) — retrying without cursor', after_id, company.id, exc
+                )
+                result = api_svc.list_inbound_invoices(
+                    company, created_at_from, created_at_to, after=None, limit=50
+                )
+            else:
+                raise
 
         page_invoices = result.get('results', result) if isinstance(result, dict) else result
         next_url = result.get('next') if isinstance(result, dict) else None
+        last_seen_id = after_id  # advances to the last id actually returned, in API order
 
         while True:
             for tca_invoice in page_invoices:
                 tca_id = tca_invoice.get('id')
                 xml_location_path = tca_invoice.get('document_location_path') or tca_invoice.get('invoice_xml_location_path')
-                created_at = str(tca_invoice.get('created_at') or '')
 
                 if not tca_id:
                     continue
+                last_seen_id = tca_id
 
-                # G-6: skip if older than cursor (already imported in a prior run)
-                if last_sync and created_at and created_at < last_sync:
-                    continue
-
-                # Deduplication — belt-and-suspenders after cursor check
+                # Deduplication — belt-and-suspenders alongside the window/cursor
                 existing = self.env['account.move'].search([
                     ('tca_invoice_uuid', '=', tca_id),
                     ('company_id', '=', company.id),
@@ -2577,7 +2637,7 @@ class AccountMove(models.Model):
                     continue
 
                 if not xml_location_path:
-                    # List endpoint omits xml path — fetch detail (same as webhook).
+                    # List endpoint may omit xml path — fetch detail (same as webhook).
                     # Backend returns it on single GET via `invoice_xml_location_path`.
                     try:
                         detail = api_svc.get_invoice_status(company, tca_id)
@@ -2602,15 +2662,11 @@ class AccountMove(models.Model):
                 # After commit, the ORM cache must be invalidated: records held
                 # in-memory may be stale relative to other concurrent transactions
                 # that ran while we were doing HTTP work for this iteration.
-                move = self._tca_import_inbound_invoice(
+                self._tca_import_inbound_invoice(
                     company, tca_id, xml_location_path, api_svc
                 )
                 self.env.cr.commit()  # noqa: B012 — intentional mid-cron commit
                 self.env.invalidate_all()
-
-                if move:
-                    if created_at > latest_created_at:
-                        latest_created_at = created_at
 
             # G-4: follow pagination
             if not next_url:
@@ -2623,13 +2679,15 @@ class AccountMove(models.Model):
                 _logger.error('TCA cron: pagination fetch failed (%s) — stopping', exc)
                 break
 
-        # G-6: advance cursor to latest invoice seen this run
-        if latest_created_at and latest_created_at > last_sync:
-            ICP.set_param(cursor_key, latest_created_at)
-            _logger.info(
-                'TCA cron: updated last_inbound_sync for company %s to %s',
-                company.id, latest_created_at
-            )
+        # G-6: advance both cursors — window start becomes this run's end,
+        # after becomes the last invoice id actually seen (API return order).
+        ICP.set_param(time_key, created_at_to)
+        if last_seen_id and last_seen_id != after_id:
+            ICP.set_param(after_key, last_seen_id)
+        _logger.info(
+            'TCA cron: updated inbound cursor for company %s (time=%s, after=%s)',
+            company.id, created_at_to, last_seen_id
+        )
 
     def _tca_import_inbound_invoice(self, company, tca_id, xml_location_path, api_svc=None):
         """

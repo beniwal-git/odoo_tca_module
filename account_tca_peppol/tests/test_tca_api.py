@@ -356,17 +356,34 @@ class TestTcaApiSendFlow(TcaTestCase):
     # ── Inbound listing ───────────────────────────────────────────────────────
 
     def test_list_inbound_invoices_uses_direction_2(self):
-        """list_inbound_invoices must GET with direction=2 query param."""
+        """list_inbound_invoices must GET with direction=2 query param, the
+        AP type-code filter, and the required created_at window."""
         resp = {'count': 1, 'next': None, 'previous': None, 'results': [
             {'id': 'in-001', 'direction': 2, 'invoice_xml_location_path': 's3://in/001.xml'}
         ]}
         with patch(_URLOPEN, return_value=_mock_http_response(resp)) as m:
-            result = self.api.list_inbound_invoices(self.company)
+            result = self.api.list_inbound_invoices(
+                self.company, '2026-03-01T00:00:00Z', '2026-04-01T00:00:00Z',
+            )
 
         req = m.call_args[0][0]
         self.assertIn('direction=2', req.full_url)
+        self.assertIn('invoice_type_code__in=380,381,480,81', req.full_url)
+        self.assertIn('created_at_from=2026-03-01T00:00:00Z', req.full_url)
+        self.assertIn('created_at_to=2026-04-01T00:00:00Z', req.full_url)
         self.assertEqual(req.get_method(), 'GET')
         self.assertEqual(len(result['results']), 1)
+
+    def test_list_inbound_invoices_with_after_cursor(self):
+        """after=<id> is only appended when a cursor is passed in."""
+        resp = {'count': 0, 'next': None, 'previous': None, 'results': []}
+        with patch(_URLOPEN, return_value=_mock_http_response(resp)) as m:
+            self.api.list_inbound_invoices(
+                self.company, '2026-03-01T00:00:00Z', '2026-04-01T00:00:00Z',
+                after='in-000',
+            )
+        req = m.call_args[0][0]
+        self.assertIn('after=in-000', req.full_url)
 
     def test_list_processing_outbound_uses_direction_1_status_1(self):
         """list_processing_outbound must GET with direction=1&status=1."""

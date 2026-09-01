@@ -123,9 +123,6 @@
                             <field name="tca_buyer_emirate"
                                    invisible="not tca_buyer_is_uae"
                                    readonly="move_type in ('in_invoice', 'in_refund')"/>
-                            <field name="tca_payment_means_code"
-                                   invisible="tca_show_credit_note_fields"
-                                   readonly="move_type in ('in_invoice', 'in_refund')"/>
                             <field name="tca_credit_note_reason"
                                    invisible="not tca_show_credit_note_fields"/>
                         </group>
@@ -141,6 +138,25 @@
                                    invisible="tca_buyer_legal_id_type != 'PAS'"
                                    readonly="move_type in ('in_invoice', 'in_refund')"/>
                         </group>
+                    </group>
+                    <!-- Payment Means (IBT-081 / IBG-16) — 0..n on PINT AE, so a list
+                         rather than a single dropdown: an invoice can be part cash,
+                         part credit card, etc. Card Number/Card Holder Name only
+                         apply to Credit/Debit card lines and only ONE line total may
+                         carry them (ibr-066-ae), enforced at Confirm. -->
+                    <group string="Payment Means"
+                           invisible="tca_show_credit_note_fields"
+                           readonly="move_type in ('in_invoice', 'in_refund')">
+                        <field name="tca_payment_means_ids" nolabel="1" colspan="2">
+                            <tree editable="bottom">
+                                <field name="sequence" widget="handle"/>
+                                <field name="tca_payment_means_code"/>
+                                <field name="tca_card_pan" placeholder="masked, e.g. ************1234"/>
+                                <field name="tca_card_holder_name"/>
+                                <field name="tca_mandate_id"/>
+                                <field name="tca_payer_account_id" string="Payer IBAN"/>
+                            </tree>
+                        </field>
                     </group>
                     <!-- Row 2: Transaction Type (Optional) — collapsed by default.
                          Toggle "Use Special Type" reveals 7 user-friendly checkboxes

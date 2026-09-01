@@ -252,6 +252,13 @@ class AccountMove(models.Model):
         shared with the @api.onchange so the rules cannot drift.
         """
         for move in self:
+            if not move.partner_id:
+                # Customer removed — nothing left to route to. Clears even a
+                # manually-typed value, same as the other buyer-derived
+                # fields below: with no buyer, none of this data still means
+                # anything, and leaving it behind is misleading.
+                move.tca_buyer_participant_id = ''
+                continue
             current = (move.tca_buyer_participant_id or '').strip()
             # Preserve user-set values (anything not in the auto-set predefined set).
             if current and current not in self._ANON_BUYER_PIDS:
@@ -1015,6 +1022,9 @@ class AccountMove(models.Model):
     @api.depends('partner_id', 'partner_id.tca_emirate', 'partner_id.state_id')
     def _compute_tca_buyer_emirate(self):
         for move in self:
+            if not move.partner_id:
+                move.tca_buyer_emirate = False  # customer removed — clear
+                continue
             if move.tca_buyer_emirate:
                 continue  # user-set or previously computed — preserve
             partner = move.partner_id.commercial_partner_id
@@ -1092,6 +1102,13 @@ class AccountMove(models.Model):
     )
     def _compute_tca_buyer_legal_fields(self):
         for move in self:
+            if not move.partner_id:
+                # Customer removed — clear, same as the other buyer fields.
+                move.tca_buyer_legal_id_type = False
+                move.tca_buyer_trade_license = False
+                move.tca_buyer_legal_authority = False
+                move.tca_buyer_passport_country_id = False
+                continue
             partner = move.partner_id.commercial_partner_id
             # Each field: don't overwrite if user already set on this invoice
             if not move.tca_buyer_legal_id_type and partner.tca_legal_id_type:
@@ -1122,9 +1139,18 @@ class AccountMove(models.Model):
         Runs in the form UI on every partner_id change, so values appear
         without needing the user to re-select the customer.
 
-        Preserves user-edited values on the invoice (only fills empty fields).
+        Preserves user-edited values on the invoice (only fills empty fields)
+        when a customer is set or changed — that part is unchanged. When the
+        customer is removed entirely, the buyer fields are cleared instead
+        of being left stale from whichever partner was previously selected.
         """
         if not self.partner_id:
+            self.tca_buyer_participant_id = ''
+            self.tca_buyer_emirate = False
+            self.tca_buyer_legal_id_type = False
+            self.tca_buyer_trade_license = False
+            self.tca_buyer_legal_authority = False
+            self.tca_buyer_passport_country_id = False
             return
 
         partner = self.partner_id.commercial_partner_id

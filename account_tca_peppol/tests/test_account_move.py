@@ -194,3 +194,72 @@ class TestVatCategoryN(TcaTestCase):
         self.assertEqual(line['vat_info'][0]['vat_category_code'], 'N')
         self.assertEqual(line['vat_info'][0]['vat_rate'], 5.0)  # rate present
         self.assertEqual(line['vat_line_amount_in_aed'], 0.0)   # amount zeroed
+
+
+@tagged('post_install', '-at_install')
+class TestBuyerFieldsOnPartnerChange(TcaTestCase):
+    """
+    Removing the customer must clear the buyer-derived fields (participant
+    ID, emirate, legal fields) instead of leaving them stale from whichever
+    partner was previously selected. Changing to a DIFFERENT partner must
+    keep the existing "only fill blank fields, preserve overrides" behavior
+    unchanged.
+    """
+
+    def _draft_invoice(self, partner=None):
+        return self.env['account.move'].with_company(self.company).create({
+            'move_type': 'out_invoice',
+            'partner_id': (partner or self.partner).id,
+            'company_id': self.company.id,
+            'journal_id': self.journal.id,
+            'invoice_date': odoo_fields.Date.context_today(self.env['account.move']),
+            'invoice_line_ids': [(0, 0, self._line_vals())],
+        })
+
+    def test_buyer_fields_cleared_when_partner_removed(self):
+        invoice = self._draft_invoice()
+        # Sanity: buyer fields auto-filled from self.partner on create.
+        self.assertTrue(invoice.tca_buyer_participant_id)
+        self.assertTrue(invoice.tca_buyer_emirate)
+        self.assertTrue(invoice.tca_buyer_trade_license)
+
+        invoice.partner_id = False
+
+        self.assertFalse(invoice.tca_buyer_participant_id)
+        self.assertFalse(invoice.tca_buyer_emirate)
+        self.assertFalse(invoice.tca_buyer_legal_id_type)
+        self.assertFalse(invoice.tca_buyer_trade_license)
+        self.assertFalse(invoice.tca_buyer_legal_authority)
+        self.assertFalse(invoice.tca_buyer_passport_country_id)
+
+    def test_buyer_fields_refill_after_partner_reselected(self):
+        """After a removal clears the fields, picking a partner again
+        re-derives them — the normal empty-field-fill path, unaffected."""
+        invoice = self._draft_invoice()
+        invoice.partner_id = False
+        invoice.partner_id = self.partner.id
+        self.assertEqual(invoice.tca_buyer_trade_license, self.partner.tca_trade_license)
+        self.assertEqual(invoice.tca_buyer_emirate, self.partner.tca_emirate)
+
+    def test_manual_override_preserved_when_switching_to_different_partner(self):
+        """Changing to a DIFFERENT partner (not removing) must still only
+        fill blank fields — a manual override survives. Unchanged behavior."""
+        other = self.env['res.partner'].create({
+            'name': 'Other UAE Buyer',
+            'is_company': True,
+            'country_id': self.uae.id,
+            'street': 'Other Street',
+            'city': 'Sharjah',
+            'vat': '100000000000099',
+            'peppol_eas': '0235',
+            'peppol_endpoint': '1000000099',
+            'ubl_cii_format': 'ubl_pint_ae',
+            'tca_emirate': 'SHJ',
+            'tca_legal_id_type': 'TL',
+            'tca_trade_license': 'SHJ-9999',
+            'tca_legal_authority': 'SHJ Authority',
+        })
+        invoice = self._draft_invoice()
+        invoice.tca_buyer_trade_license = 'MANUAL-OVERRIDE-001'
+        invoice.partner_id = other.id
+        self.assertEqual(invoice.tca_buyer_trade_license, 'MANUAL-OVERRIDE-001')

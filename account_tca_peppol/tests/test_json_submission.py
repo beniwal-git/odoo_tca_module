@@ -15,6 +15,24 @@ from .common import TcaTestCase
 
 
 @tagged('post_install', '-at_install')
+class TestSubmissionId(TcaTestCase):
+    """_tca_build_submission_id must be the record's own name, no
+    per-attempt uniquifying suffix (previously '<name>-<uuid8>')."""
+
+    def test_submission_id_is_plain_name(self):
+        invoice = self._make_invoice()
+        self.assertEqual(invoice._tca_build_submission_id(), invoice.name)
+
+    def test_submission_id_stable_across_calls(self):
+        """Same invoice, same submission_id every time — no randomness."""
+        invoice = self._make_invoice()
+        first = invoice._tca_build_submission_id()
+        second = invoice._tca_build_submission_id()
+        self.assertEqual(first, second)
+        self.assertEqual(first, invoice.name)
+
+
+@tagged('post_install', '-at_install')
 class TestJsonDetailBuilder(TcaTestCase):
     """_tca_build_json_detail must produce a §9-shaped `detail` tree."""
 

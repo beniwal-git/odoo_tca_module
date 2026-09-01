@@ -18,7 +18,6 @@ _get_ubl_cii_builder_from_xml_tree: PINT AE CustomizationID routed to our builde
 
 import logging
 import re
-import uuid
 from datetime import timedelta
 
 from odoo import _, api, fields, models
@@ -115,11 +114,8 @@ class AccountMove(models.Model):
         string='Last TCA Submission ID',
         copy=False,
         readonly=True,
-        help='The invoice_number actually sent to TCA on the most recent attempt. '
-             'Per UAE FTA compliance, each submission must carry a unique ID; we '
-             'compose <record name>-<uuid8> per attempt. Differs from this '
-             'record\'s name — Odoo keeps the canonical invoice number, TCA tracks '
-             'each submission with its own ID.',
+        help='The invoice_number sent to TCA on the most recent attempt — same as '
+             'this record\'s name.',
     )
     tca_is_inbound = fields.Boolean(
         string='TCA Inbound',
@@ -1705,22 +1701,21 @@ class AccountMove(models.Model):
 
     def _tca_build_submission_id(self):
         """
-        Build a unique invoice_number for a TCA submission attempt.
-
-        UAE FTA compliance rule: the same invoice ID cannot be processed by
-        the Peppol network more than once. Every API call to TCA must carry
-        a distinct identifier. Composing it as `<record name>-<uuid8>` makes
-        each attempt guaranteed-unique without relying on a counter that
-        could roll back on transaction failure.
+        The invoice_number sent to TCA for a submission attempt: the
+        record's own name, unchanged — no per-attempt uniquifying suffix.
 
         Retry policy: this method is only ever called from contexts gated by
         _tca_is_send_eligible(), which restricts to tca_move_state in
         ('not_sent', 'error', 'rejected'). Once TCA has accepted the
         document (state moves past 'submitted'), retries are blocked
         upstream — so we never re-submit a record TCA has already processed.
+        A resubmit after a TCA-side rejection/failure reuses the same
+        invoice_number; TCA's own duplicate handling (see
+        tca_api._execute_request's 409/400-"exists" handling) covers the
+        case where that resubmit turns out to already be on file.
         """
         self.ensure_one()
-        return f'{self.name}-{uuid.uuid4().hex[:8]}'
+        return self.name
 
     # ──────────────────────────────────────────────────────────────────────────
     # JSON SUBMISSION BUILDER — inline-JSON outbound flow (ASP JSON schema §9)
@@ -2184,8 +2179,7 @@ class AccountMove(models.Model):
         # 1. Build the PINT AE detail tree from this move.
         detail = self._tca_build_json_detail()
 
-        # 2. Unique submission id for THIS attempt (UAE compliance — a given
-        #    invoice_number is accepted by the network only once).
+        # 2. invoice_number for this submission (the record's own name).
         submission_id = self._tca_build_submission_id()
 
         # 3. Submit (synchronous validation).
@@ -2222,7 +2216,8 @@ class AccountMove(models.Model):
                 'be retried automatically; you can also use "Retry TCA" later.', exc,
             )) from exc
 
-        # 4. Duplicate (defensive — unique submission_id should prevent it).
+        # 4. Duplicate — expected on a resubmit if the prior attempt actually
+        #    made it through despite the failure that triggered this retry.
         if result.get('tca_duplicate'):
             self.write({
                 'tca_move_state': 'submitted',
@@ -2819,10 +2814,10 @@ class AccountMove(models.Model):
         Print wizard for a fresh submission — TCA's dedicated /resubmit/
         endpoint only accepts the legacy XML/S3 (source_file_path) contract,
         which this module no longer uses (see docs/PORTING_17_vs_19.md P2.2).
-        A resend is simply a new inline-JSON POST /invoices/ with a fresh
-        unique invoice_number (_tca_build_submission_id), which the UAE
-        compliance rule already requires per attempt — no reliance on TCA
-        treating it as a literal "resubmission" of the prior tca_invoice_uuid.
+        A resend is simply a new inline-JSON POST /invoices/ with the same
+        invoice_number (_tca_build_submission_id) — relies on TCA's own
+        duplicate handling if it turns out this exact submission already
+        made it through despite the prior error.
         """
         self.ensure_one()
         if self.tca_move_state not in ('error', 'rejected'):

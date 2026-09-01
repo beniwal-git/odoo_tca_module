@@ -280,10 +280,9 @@ class AccountMoveSend(models.TransientModel):
                         _logger.warning('TCA: pre-validation failed for %s: %s', invoice.name, exc)
 
             # ── Build the JSON detail tree and submit ─────────────────────────
-            # UAE compliance: each submission carries a unique invoice_number
-            # (TCA rejects re-use of the same ID). Built via the same helper
-            # on account.move used by the credit-note atomic-post path
-            # (account_move._tca_submit_outbound), so both paths stay in sync.
+            # invoice_number is the record's own name (_tca_build_submission_id
+            # on account.move — same helper used by the credit-note atomic-post
+            # path, account_move._tca_submit_outbound, so both stay in sync).
             invoice.tca_move_state = 'uploading'
             try:
                 detail = invoice._tca_build_json_detail()
@@ -325,8 +324,9 @@ class AccountMoveSend(models.TransientModel):
                 continue
 
             # ── Handle 409/400-already-exists duplicate as success ───────────
-            # Defensive: should not happen with our per-attempt unique
-            # submission_id, but catches state-desync edge cases.
+            # A resubmit reuses the same invoice_number, so this is the
+            # expected path when the prior attempt actually made it through
+            # despite the error that triggered this resend.
             if result.get('tca_duplicate'):
                 _logger.info('TCA: invoice %s already exists on TCA, treating as success', invoice.name)
                 invoice.write({

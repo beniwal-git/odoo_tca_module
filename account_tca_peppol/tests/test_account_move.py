@@ -121,7 +121,7 @@ class TestCreateEinvoiceToggle(TcaTestCase):
             'partner_id': self.partner.id,  # ubl_pint_ae format — would pass that check
             'company_id': self.company.id,
             'journal_id': self._get_or_create_purchase_journal().id,
-            'invoice_date': fields.Date.context_today(self.env['account.move']),
+            'invoice_date': odoo_fields.Date.context_today(self.env['account.move']),
             'invoice_line_ids': [(0, 0, self._line_vals())],
         })
 

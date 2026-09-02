@@ -54,6 +54,11 @@
         'views/res_partner_views.xml',
         'views/account_tax_views.xml',
     ],
+    'assets': {
+        'web.assets_backend': [
+            'account_tca_peppol/static/src/scss/account_move_form.scss',
+        ],
+    },
     'license': 'OPL-1',
     'auto_install': False,
     'installable': True,

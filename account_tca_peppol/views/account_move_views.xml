@@ -42,12 +42,36 @@
                 </button>
             </xpath>
 
-            <!-- ── Per-document e-invoicing opt-out toggle ─────────────── -->
-            <xpath expr="//header" position="inside">
-                <field name="tca_create_einvoice" widget="boolean_toggle"
-                       string="Create E-Invoice (UAE)"
-                       invisible="not tca_company_is_active or move_type not in ('out_invoice', 'out_refund') or tca_is_inbound"
-                       readonly="state != 'draft'"/>
+            <!-- ── Per-document e-invoicing opt-out, placed in the header beside
+                 the Confirm button (gap + light-purple pill matching the Draft
+                 statusbar). Default ON. Off → PINT AE fields/checks/submit are
+                 all suppressed for this move (see model gating). Shown for:
+                   - documents WE issue (out_invoice/out_refund — outbound TCA
+                     submission applies; no self-billing on this branch, see
+                     docs/PORTING_17_vs_19.md P2.1)
+                   - manually-entered vendor bills / vendor bill credit notes
+                     (in_invoice/in_refund, NOT received via TCA inbound —
+                     tca_is_inbound excludes those) — here the toggle only
+                     hides/shows the PINT AE data-entry panel below for a
+                     purchase that doesn't need UAE VAT fields; it never
+                     triggers outbound TCA submission
+                     (_tca_is_send_eligible() is hard-restricted to
+                     out_invoice/out_refund regardless of this toggle).
+                 Under an active TCA company; readonly once posted. -->
+            <!-- Order the header as: Confirm · Cancel · Create E-Invoice toggle.
+                 Anchor the toggle after the 2nd button_cancel ("Cancel" — the
+                 non-entry variant; the 1st is "Cancel Entry"). On a draft
+                 invoice only Confirm + Cancel are visible (Send/Print are
+                 posted-only), so this yields the requested sequence. `string`
+                 cannot be an inheritance selector, so match by position —
+                 same anchor as core 17.0's account.view_move_form. -->
+            <xpath expr="//header/button[@name='button_cancel'][2]" position="after">
+                <div class="o_tca_einvoice_header d-inline-flex align-items-center gap-2"
+                     invisible="not tca_company_is_active or tca_is_inbound or move_type not in ('out_invoice', 'out_refund', 'in_invoice', 'in_refund')">
+                    <field name="tca_create_einvoice" widget="boolean_toggle" nolabel="1"
+                           readonly="state != 'draft'"/>
+                    <span>Create E-Invoice (UAE)</span>
+                </div>
             </xpath>
 
             <!-- ── Header buttons: Accept/Reject for inbound invoices ──── -->
@@ -99,7 +123,12 @@
 
             <!-- ── UAE PINT AE fields — inline below customer details ─── -->
             <xpath expr="//notebook[page[@id='invoice_tab']]" position="before">
-                <group invisible="move_type not in ('out_invoice', 'out_refund', 'in_invoice', 'in_refund')">
+                <!-- The Create E-Invoice toggle lives in the header (beside
+                     Confirm). Declared invisible here too so the field is
+                     loaded for the `parent.tca_create_einvoice` line-column
+                     domains below and this group's own invisible condition. -->
+                <field name="tca_create_einvoice" invisible="1"/>
+                <group invisible="move_type not in ('out_invoice', 'out_refund', 'in_invoice', 'in_refund') or not tca_create_einvoice">
                     <!-- Row 1: core mandatory fields + UAE buyer legal (auto-shown) -->
                     <group>
                         <group string="Invoice &amp; Buyer">
@@ -259,14 +288,20 @@
 
             <!-- ── Invoice line columns: UAE fields ────────────────────── -->
             <xpath expr="//field[@name='invoice_line_ids']/tree/field[@name='price_unit']" position="after">
-                <field name="tca_commodity_type" optional="show" string="Commodity (UAE)"/>
-                <field name="tca_hs_code" optional="show" string="HS Code"/>
-                <field name="tca_service_accounting_code" optional="hide" string="SAC"/>
-                <field name="tca_standard_item_id" optional="hide" string="GTIN / Standard ID"/>
-                <field name="tca_rc_description" optional="hide" string="RC Description"/>
+                <field name="tca_commodity_type" optional="show" string="Commodity (UAE)"
+                       column_invisible="not parent.tca_create_einvoice"/>
+                <field name="tca_hs_code" optional="show" string="HS Code"
+                       column_invisible="not parent.tca_create_einvoice"/>
+                <field name="tca_service_accounting_code" optional="hide" string="SAC"
+                       column_invisible="not parent.tca_create_einvoice"/>
+                <field name="tca_standard_item_id" optional="hide" string="GTIN / Standard ID"
+                       column_invisible="not parent.tca_create_einvoice"/>
+                <field name="tca_rc_description" optional="hide" string="RC Description"
+                       column_invisible="not parent.tca_create_einvoice"/>
                 <field name="tca_line_needs_exemption_reason" column_invisible="1"/>
                 <field name="tca_vat_exemption_reason_code" optional="hide" string="Exemption Reason"
-                       required="tca_line_needs_exemption_reason"/>
+                       required="tca_line_needs_exemption_reason"
+                       column_invisible="not parent.tca_create_einvoice"/>
             </xpath>
 
             <!-- ── Line tax picker: restrict to the canonical PINT AE taxes ──

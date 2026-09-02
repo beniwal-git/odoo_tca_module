@@ -77,12 +77,12 @@ class AccountTax(models.Model):
     # the actual VAT-bearing rate is company/product specific — S is the one
     # rate-carrying template (5%, the standard UAE rate).
     _PINT_TAX_TEMPLATES = [
-        ('S',  5.0, _('5%% VAT (UAE)'), _('5%% VAT (UAE) — Purchases')),
-        ('E',  0.0, _('0%% Exempt (UAE)'), _('0%% Exempt (UAE) — Purchases')),
-        ('O',  0.0, _('0%% Out-of-Scope (UAE)'), _('0%% Out-of-Scope (UAE) — Purchases')),
-        ('AE', 0.0, _('0%% Reverse Charge (UAE)'), _('0%% Reverse Charge (UAE) — Purchases')),
-        ('Z',  0.0, _('0%% Zero-Rated (UAE)'), _('0%% Zero-Rated (UAE) — Purchases')),
-        ('N',  0.0, _('0%% Standard Rate Additional VAT (UAE)'), _('0%% Standard Rate Additional VAT (UAE) — Purchases')),
+        ('S',  5.0, _('5% VAT (UAE)'), _('5% VAT (UAE) — Purchases')),
+        ('E',  0.0, _('0% Exempt (UAE)'), _('0% Exempt (UAE) — Purchases')),
+        ('O',  0.0, _('0% Out-of-Scope (UAE)'), _('0% Out-of-Scope (UAE) — Purchases')),
+        ('AE', 0.0, _('0% Reverse Charge (UAE)'), _('0% Reverse Charge (UAE) — Purchases')),
+        ('Z',  0.0, _('0% Zero-Rated (UAE)'), _('0% Zero-Rated (UAE) — Purchases')),
+        ('N',  0.0, _('0% Standard Rate Additional VAT (UAE)'), _('0% Standard Rate Additional VAT (UAE) — Purchases')),
     ]
 
     @api.model

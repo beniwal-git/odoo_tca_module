@@ -93,6 +93,67 @@ class TestCreateEinvoiceToggle(TcaTestCase):
         self.assertTrue(invoice.tca_create_einvoice)
         self.assertTrue(invoice._tca_is_send_eligible())
 
+    def test_toggle_off_does_not_copy_to_duplicate(self):
+        """copy=False: excluding one document must not silently exclude a
+        duplicate/reversal of it — each new document starts back at ON."""
+        invoice = self._make_invoice()
+        invoice.tca_create_einvoice = False
+        duplicate = invoice.copy()
+        self.assertTrue(duplicate.tca_create_einvoice)
+
+    def _get_or_create_purchase_journal(self):
+        journal = self.env['account.journal'].search([
+            ('type', '=', 'purchase'),
+            ('company_id', '=', self.company.id),
+        ], limit=1)
+        if not journal:
+            journal = self.env['account.journal'].create({
+                'name': 'Vendor Bills (TCA test)',
+                'type': 'purchase',
+                'code': 'TCABILL',
+                'company_id': self.company.id,
+            })
+        return journal
+
+    def _make_vendor_move(self, move_type):
+        return self.env['account.move'].with_company(self.company).create({
+            'move_type': move_type,
+            'partner_id': self.partner.id,  # ubl_pint_ae format — would pass that check
+            'company_id': self.company.id,
+            'journal_id': self._get_or_create_purchase_journal().id,
+            'invoice_date': fields.Date.context_today(self.env['account.move']),
+            'invoice_line_ids': [(0, 0, self._line_vals())],
+        })
+
+    def test_vendor_bill_never_send_eligible(self):
+        """A manually-entered vendor bill (in_invoice) must never be
+        send-eligible, even with every other condition satisfied (TCA
+        active, toggle on, posted, not inbound, PINT-AE-format partner) —
+        self-billing is explicitly out of scope on this branch. The Create
+        E-Invoice toggle on an in_invoice only hides the PINT AE panel; it
+        must not open a path to outbound TCA submission."""
+        self.company.tca_is_active = True
+        bill = self._make_vendor_move('in_invoice')
+        bill.action_post()
+        self.assertTrue(bill.tca_create_einvoice)  # default ON
+        self.assertFalse(bill.tca_is_inbound)
+        self.assertFalse(
+            bill._tca_is_send_eligible(),
+            'a vendor bill must never be TCA send-eligible'
+        )
+
+    def test_vendor_bill_credit_note_never_send_eligible(self):
+        """Same guarantee as above, for a vendor bill credit note (in_refund)."""
+        self.company.tca_is_active = True
+        bill = self._make_vendor_move('in_refund')
+        bill.action_post()
+        self.assertTrue(bill.tca_create_einvoice)  # default ON
+        self.assertFalse(bill.tca_is_inbound)
+        self.assertFalse(
+            bill._tca_is_send_eligible(),
+            'a vendor bill credit note must never be TCA send-eligible'
+        )
+
 
 @tagged('post_install', '-at_install')
 class TestOutOfScopeMirror(TcaTestCase):

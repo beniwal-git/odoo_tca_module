@@ -136,13 +136,21 @@ class AccountMove(models.Model):
     tca_create_einvoice = fields.Boolean(
         string='Create E-Invoice (UAE)',
         default=True,
-        copy=True,
+        copy=False,
         help=(
             'Per-document opt-out of PINT AE e-invoicing. On by default for '
             'eligible documents. Untick to skip PINT AE validation and TCA '
             'submission entirely for this specific invoice/credit note — use '
             'for the rare document that must NOT go through TCA even though '
-            'the company and partner are otherwise configured for it.'
+            'the company and partner are otherwise configured for it.\n'
+            'On a manually-entered vendor bill or vendor bill credit note '
+            '(in_invoice/in_refund, not received via TCA inbound), this only '
+            'hides the PINT AE data-entry panel — vendor documents are never '
+            'submitted outbound to TCA on this branch regardless of this '
+            'toggle.\n'
+            'copy=False: a duplicated or reversed document always starts back '
+            'at the default ON — excluding one document never silently '
+            'excludes another you did not explicitly opt out.'
         ),
     )
 
@@ -1202,6 +1210,14 @@ class AccountMove(models.Model):
         Returns True if this invoice can be submitted (or resubmitted) to TCA.
         An invoice is eligible when:
           - the company has TCA integration active
+          - the move is a sale document (out_invoice/out_refund) — vendor
+            bills (in_invoice/in_refund) are never submitted outbound to TCA
+            on this branch: self-billing is explicitly out of scope (see
+            docs/PORTING_17_vs_19.md P2.1, "drop self billing entirely —
+            Odoo 17 itself do not support self billing"). Explicit here so
+            this stays true even if a future path (cron, another wizard)
+            calls this method for an in_* move — not just enforced
+            incidentally by Send & Print's own out_*-only button visibility.
           - the partner is configured with a PINT AE format (ubl_pint_ae)
           - the invoice is in 'posted' state
           - the move is outbound (not a vendor bill received via TCA)
@@ -1211,6 +1227,7 @@ class AccountMove(models.Model):
             self.company_id.tca_is_active
             and self.tca_create_einvoice
             and self.state == 'posted'
+            and self.move_type in ('out_invoice', 'out_refund')
             and not self.tca_is_inbound
             and self.partner_id.commercial_partner_id.ubl_cii_format == 'ubl_pint_ae'
             and self.tca_move_state in ('not_sent', 'error', 'rejected')

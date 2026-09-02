@@ -46,11 +46,15 @@ class AccountMoveSend(models.TransientModel):
     # COMPUTE
     # ──────────────────────────────────────────────────────────────────────────
 
-    @api.depends('move_ids', 'enable_ubl_cii_xml')
+    @api.depends('move_ids', 'move_ids.tca_create_einvoice', 'enable_ubl_cii_xml')
     def _compute_enable_tca(self):
         """
         Show the TCA Peppol send option when:
           - The company has TCA integration active
+          - At least one move still has the per-document "Create E-Invoice"
+            toggle on — a move with it off must never be auto-queued for
+            TCA submission from this wizard (that's the whole point of the
+            toggle; see tca_create_einvoice's help text)
           - The invoices are not already in-flight on TCA
 
         The buyer's Peppol registration is NOT checked here — TCA handles
@@ -58,6 +62,9 @@ class AccountMoveSend(models.TransientModel):
         """
         for wizard in self:
             if not wizard.company_id.tca_is_active:
+                wizard.enable_tca = False
+                continue
+            if not any(wizard.move_ids.mapped('tca_create_einvoice')):
                 wizard.enable_tca = False
                 continue
 
@@ -229,6 +236,18 @@ class AccountMoveSend(models.TransientModel):
                 continue
             if invoice.tca_move_state in ('processing', 'delivered', 'buyer_confirmed'):
                 _logger.info('TCA: skipping already-submitted invoice %s', invoice.name)
+                continue
+            # send_tca is a single wizard-level checkbox applied uniformly to
+            # every move in the batch (account.move.send._process_send_and_print
+            # spreads _get_wizard_values() across all moves_data identically) —
+            # it does NOT vary per invoice. Re-check the per-document opt-out
+            # here so a batch send with the TCA checkbox on can't submit an
+            # invoice whose "Create E-Invoice" toggle is off.
+            if not invoice.tca_create_einvoice:
+                _logger.info(
+                    'TCA: skipping %s — "Create E-Invoice" is off for this document.',
+                    invoice.name
+                )
                 continue
 
             # Resolve company per invoice. Standard `account.move.send`

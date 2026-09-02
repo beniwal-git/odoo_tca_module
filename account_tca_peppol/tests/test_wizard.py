@@ -107,6 +107,24 @@ class TestComputeEnableTca(TcaTestCase):
                 self.assertFalse(wizard.enable_tca,
                                  'enable_tca should be False for delivered invoice with no XML')
 
+    def test_enable_tca_false_when_create_einvoice_off(self):
+        """
+        Per-document opt-out (tca_create_einvoice=False) must hide the TCA
+        option in the wizard, even though company + partner are otherwise
+        fully eligible. Without this check, the wizard's TCA checkbox would
+        stay available and a batch send could submit a document the user
+        explicitly excluded from e-invoicing.
+        """
+        self.company.tca_is_active = True
+        invoice = self._make_invoice()
+        invoice.tca_create_einvoice = False
+
+        wizard = _make_wizard(self.env, invoice, self.company)
+        self.assertFalse(
+            wizard.enable_tca,
+            'enable_tca must be False when the invoice has "Create E-Invoice" off'
+        )
+
 
 @tagged('post_install', '-at_install')
 class TestComputeCheckboxSendTca(TcaTestCase):

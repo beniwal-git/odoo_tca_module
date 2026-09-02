@@ -142,3 +142,25 @@ def _post_init_migrate_invoice_type_code(env):
                   SELECT 1 FROM tca_payment_means pm WHERE pm.move_id = am.id
               )
         """)
+
+    # ── 7. Fix "5%% VAT (UAE)"-style double-percent tax names. The six
+    # bootstrapped PINT AE tax templates (_PINT_TAX_TEMPLATES) used _('5%% ...')
+    # — correct only when a string later goes through %-interpolation, which
+    # these never did — so any tax already created before the fix has a
+    # literal "%%" baked into its (translatable, JSONB-stored) name. Scoped
+    # to tca_tax_category rows only, so a user's own unrelated tax named
+    # with a literal "%%" is left alone.
+    env.cr.execute("""
+        SELECT column_name FROM information_schema.columns
+        WHERE table_name = 'account_tax' AND column_name = 'tca_tax_category'
+    """)
+    if env.cr.fetchone():
+        env.cr.execute("""
+            UPDATE account_tax
+            SET name = (
+                SELECT jsonb_object_agg(kv.key, to_jsonb(replace(kv.value #>> '{}', '%%', '%')))
+                FROM jsonb_each(account_tax.name) AS kv
+            )
+            WHERE tca_tax_category IS NOT NULL
+              AND position('%%' in name::text) > 0
+        """)

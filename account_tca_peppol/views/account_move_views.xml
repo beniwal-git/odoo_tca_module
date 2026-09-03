@@ -299,7 +299,13 @@
                 <field name="tca_rc_description" optional="hide" string="RC Description"
                        column_invisible="not parent.tca_create_einvoice"/>
                 <field name="tca_line_needs_exemption_reason" column_invisible="1"/>
-                <field name="tca_vat_exemption_reason_code" optional="hide" string="Exemption Reason"
+                <!-- optional="show" (not "hide"): this becomes a REQUIRED field
+                     the moment a line carries an Exempt (E) tax with no reason
+                     code of its own (see tca_line_needs_exemption_reason). A
+                     required field must never be hidden by default — a user
+                     who picks Exempt without knowing to unhide this column
+                     hits a bare "Invalid fields" error with no clue why. -->
+                <field name="tca_vat_exemption_reason_code" optional="show" string="Exemption Reason"
                        required="tca_line_needs_exemption_reason"
                        column_invisible="not parent.tca_create_einvoice"/>
             </xpath>
